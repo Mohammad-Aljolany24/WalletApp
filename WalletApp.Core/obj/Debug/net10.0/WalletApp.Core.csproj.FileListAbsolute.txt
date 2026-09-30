@@ -1,0 +1,11 @@
+C:\Users\LimitBreaker31\Desktop\WalletApp\WalletApp.Core\bin\Debug\net10.0\WalletApp.Core.deps.json
+C:\Users\LimitBreaker31\Desktop\WalletApp\WalletApp.Core\bin\Debug\net10.0\WalletApp.Core.dll
+C:\Users\LimitBreaker31\Desktop\WalletApp\WalletApp.Core\bin\Debug\net10.0\WalletApp.Core.pdb
+C:\Users\LimitBreaker31\Desktop\WalletApp\WalletApp.Core\obj\Debug\net10.0\WalletApp.Core.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\LimitBreaker31\Desktop\WalletApp\WalletApp.Core\obj\Debug\net10.0\WalletApp.Core.AssemblyInfoInputs.cache
+C:\Users\LimitBreaker31\Desktop\WalletApp\WalletApp.Core\obj\Debug\net10.0\WalletApp.Core.AssemblyInfo.cs
+C:\Users\LimitBreaker31\Desktop\WalletApp\WalletApp.Core\obj\Debug\net10.0\WalletApp.Core.csproj.CoreCompileInputs.cache
+C:\Users\LimitBreaker31\Desktop\WalletApp\WalletApp.Core\obj\Debug\net10.0\WalletApp.Core.dll
+C:\Users\LimitBreaker31\Desktop\WalletApp\WalletApp.Core\obj\Debug\net10.0\refint\WalletApp.Core.dll
+C:\Users\LimitBreaker31\Desktop\WalletApp\WalletApp.Core\obj\Debug\net10.0\WalletApp.Core.pdb
+C:\Users\LimitBreaker31\Desktop\WalletApp\WalletApp.Core\obj\Debug\net10.0\ref\WalletApp.Core.dll
