@@ -6,11 +6,11 @@ public class Wallet
 {
     public Guid Id { get; private set; }
     public decimal Balance { get; private set; }
+    public int Version { get; private set; }
 
     private readonly List<IEvent> _uncommittedEvents = new();
     public IReadOnlyList<IEvent> UncommittedEvents => _uncommittedEvents;
 
-    // Business logic: deposit
     public void Deposit(decimal amount)
     {
         if (amount <= 0)
@@ -27,7 +27,6 @@ public class Wallet
         _uncommittedEvents.Add(evt);
     }
 
-    // Business logic: withdraw
     public void Withdraw(decimal amount)
     {
         if (amount <= 0)
@@ -47,7 +46,6 @@ public class Wallet
         _uncommittedEvents.Add(evt);
     }
 
-    // The ONLY place state changes
     private void Apply(IEvent evt)
     {
         switch (evt)
@@ -59,9 +57,10 @@ public class Wallet
                 Balance -= w.Amount;
                 break;
         }
+
+        Version++;
     }
 
-    // Rebuild state from past events
     public static Wallet Rehydrate(Guid id, IEnumerable<IEvent> events)
     {
         var wallet = new Wallet { Id = id };
@@ -73,7 +72,7 @@ public class Wallet
     }
 
     public void ClearUncommittedEvents()
-{
-    _uncommittedEvents.Clear();
-}
+    {
+        _uncommittedEvents.Clear();
+    }
 }

@@ -480,3 +480,4 @@ C:\Users\LimitBreaker31\Desktop\WalletApp\WalletApp.Tests\obj\Debug\net10.0\refi
 C:\Users\LimitBreaker31\Desktop\WalletApp\WalletApp.Tests\obj\Debug\net10.0\WalletApp.Tests.pdb
 C:\Users\LimitBreaker31\Desktop\WalletApp\WalletApp.Tests\obj\Debug\net10.0\WalletApp.Tests.genruntimeconfig.cache
 C:\Users\LimitBreaker31\Desktop\WalletApp\WalletApp.Tests\obj\Debug\net10.0\ref\WalletApp.Tests.dll
+C:\Users\LimitBreaker31\Desktop\WalletApp\WalletApp.Tests\obj\Debug\net10.0\WalletApp.Tests.sourcelink.json

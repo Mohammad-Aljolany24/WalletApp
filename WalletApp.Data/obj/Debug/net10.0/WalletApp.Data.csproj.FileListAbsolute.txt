@@ -15,3 +15,4 @@ C:\Users\LimitBreaker31\Desktop\WalletApp\WalletApp.Data\obj\Debug\net10.0\Walle
 C:\Users\LimitBreaker31\Desktop\WalletApp\WalletApp.Data\obj\Debug\net10.0\ref\WalletApp.Data.dll
 C:\Users\LimitBreaker31\Desktop\WalletApp\WalletApp.Data\bin\Debug\net10.0\WalletApp.Data.runtimeconfig.json
 C:\Users\LimitBreaker31\Desktop\WalletApp\WalletApp.Data\obj\Debug\net10.0\WalletApp.Data.genruntimeconfig.cache
+C:\Users\LimitBreaker31\Desktop\WalletApp\WalletApp.Data\obj\Debug\net10.0\WalletApp.Data.sourcelink.json

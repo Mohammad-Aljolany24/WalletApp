@@ -9,3 +9,4 @@ C:\Users\LimitBreaker31\Desktop\WalletApp\WalletApp.Core\obj\Debug\net10.0\Walle
 C:\Users\LimitBreaker31\Desktop\WalletApp\WalletApp.Core\obj\Debug\net10.0\refint\WalletApp.Core.dll
 C:\Users\LimitBreaker31\Desktop\WalletApp\WalletApp.Core\obj\Debug\net10.0\WalletApp.Core.pdb
 C:\Users\LimitBreaker31\Desktop\WalletApp\WalletApp.Core\obj\Debug\net10.0\ref\WalletApp.Core.dll
+C:\Users\LimitBreaker31\Desktop\WalletApp\WalletApp.Core\obj\Debug\net10.0\WalletApp.Core.sourcelink.json

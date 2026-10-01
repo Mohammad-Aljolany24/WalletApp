@@ -155,13 +155,23 @@ app.MapPost("/wallet/deposit", async (
     var events = await eventStore.GetEventsAsync(userId);
     var wallet = Wallet.Rehydrate(userId, events);
 
+    var expectedVersion = wallet.Version;   // <-- snapshot BEFORE mutating
+
     wallet.Deposit(amount);
 
-    foreach (var evt in wallet.UncommittedEvents)
+    try
     {
-        await eventStore.AppendAsync(userId, evt);
-        await projection.HandleAsync(evt);
+        await eventStore.AppendAsync(userId, wallet.UncommittedEvents, expectedVersion);
     }
+    catch (ConcurrencyException ex)
+    {
+        return Results.Conflict(new { error = ex.Message });
+    }
+
+    foreach (var evt in wallet.UncommittedEvents)
+        await projection.HandleAsync(evt);
+
+    wallet.ClearUncommittedEvents();
 
     return Results.Ok(new { balance = wallet.Balance });
 }).RequireAuthorization();
@@ -176,13 +186,23 @@ app.MapPost("/wallet/withdraw", async (
     var events = await eventStore.GetEventsAsync(userId);
     var wallet = Wallet.Rehydrate(userId, events);
 
+    var expectedVersion = wallet.Version;   // <-- snapshot BEFORE mutating
+
     wallet.Withdraw(amount);
 
-    foreach (var evt in wallet.UncommittedEvents)
+    try
     {
-        await eventStore.AppendAsync(userId, evt);
-        await projection.HandleAsync(evt);
+        await eventStore.AppendAsync(userId, wallet.UncommittedEvents, expectedVersion);
     }
+    catch (ConcurrencyException ex)
+    {
+        return Results.Conflict(new { error = ex.Message });
+    }
+
+    foreach (var evt in wallet.UncommittedEvents)
+        await projection.HandleAsync(evt);
+
+    wallet.ClearUncommittedEvents();
 
     return Results.Ok(new { balance = wallet.Balance });
 }).RequireAuthorization();

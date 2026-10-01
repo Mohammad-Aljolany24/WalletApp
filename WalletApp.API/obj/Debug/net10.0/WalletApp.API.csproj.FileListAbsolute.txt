@@ -173,3 +173,4 @@ C:\Users\LimitBreaker31\Desktop\WalletApp\WalletApp.API\bin\Debug\net10.0\runtim
 C:\Users\LimitBreaker31\Desktop\WalletApp\WalletApp.API\bin\Debug\net10.0\Swashbuckle.AspNetCore.Swagger.dll
 C:\Users\LimitBreaker31\Desktop\WalletApp\WalletApp.API\bin\Debug\net10.0\Swashbuckle.AspNetCore.SwaggerGen.dll
 C:\Users\LimitBreaker31\Desktop\WalletApp\WalletApp.API\bin\Debug\net10.0\Swashbuckle.AspNetCore.SwaggerUI.dll
+C:\Users\LimitBreaker31\Desktop\WalletApp\WalletApp.API\obj\Debug\net10.0\WalletApp.API.sourcelink.json

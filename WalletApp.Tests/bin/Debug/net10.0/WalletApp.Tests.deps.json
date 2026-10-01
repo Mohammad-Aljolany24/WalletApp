@@ -41,6 +41,7 @@
           "FluentAssertions": "8.11.0",
           "Microsoft.AspNetCore.Mvc.Testing": "10.0.12",
           "Microsoft.EntityFrameworkCore.InMemory": "10.0.12",
+          "Microsoft.EntityFrameworkCore.SqlServer": "10.0.12",
           "Microsoft.NET.Test.Sdk": "17.14.1",
           "Moq": "4.21.0",
           "WalletApp.API": "1.0.0",

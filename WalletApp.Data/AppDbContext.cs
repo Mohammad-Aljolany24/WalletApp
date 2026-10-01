@@ -18,7 +18,7 @@ public class AppDbContext : DbContext
         {
             e.ToTable("Events");
             e.HasKey(x => x.Id);
-            e.HasIndex(x => x.AggregateId);
+             e.HasIndex(x => new { x.AggregateId, x.Version }).IsUnique();
             e.Property(x => x.EventType).HasMaxLength(100).IsRequired();
             e.Property(x => x.Data).IsRequired();
         });
