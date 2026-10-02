@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;   // <-- add
 
 namespace WalletApp.Tests.Integration;
 
@@ -88,8 +89,8 @@ public class WalletEndpointTests : IClassFixture<CustomWebApplicationFactory<Pro
     public async Task Withdraw_ReducesBalance()
     {
         var client = _factory.CreateClient();
-        var token = await TestHelpers.RegisterAndLoginAsync(
-            client, "withdraw@test.com", "password123");
+       var token = await TestHelpers.RegisterAndVerifyUserAsync(
+    client, _factory.Services, "withdraw@test.com", "password123");
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", token);
 
@@ -106,8 +107,8 @@ public class WalletEndpointTests : IClassFixture<CustomWebApplicationFactory<Pro
     public async Task Withdraw_MoreThanBalance_ReturnsError()
     {
         var client = _factory.CreateClient();
-        var token = await TestHelpers.RegisterAndLoginAsync(
-            client, "insufficient@test.com", "password123");
+        var token = await TestHelpers.RegisterAndVerifyUserAsync(
+    client, _factory.Services, "insufficient@test.com", "password123");
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", token);
 

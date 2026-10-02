@@ -37,6 +37,7 @@ public class AppDbContext : DbContext
             e.HasIndex(x => x.Email).IsUnique();
             e.Property(x => x.Email).HasMaxLength(256).IsRequired();
             e.Property(x => x.PasswordHash).IsRequired();
+            e.Property(x => x.Role).HasMaxLength(50).IsRequired(); 
         });
     }
 }

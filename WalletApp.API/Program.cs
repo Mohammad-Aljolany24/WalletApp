@@ -13,6 +13,9 @@ using WalletApp.Data;
 using WalletApp.Data.Auth;
 using WalletApp.Data.EventStore;
 using WalletApp.Data.ReadModels;
+using Microsoft.AspNetCore.Authorization;                                    // <-- add
+using WalletApp.API.Authorization;                                            // <-- add
+using WalletApp.Core.Auth.Requirements;    
 
 
 var builder = WebApplication.CreateBuilder(args);
@@ -57,6 +60,7 @@ var jwtAudience = builder.Configuration["Jwt:Audience"]!;
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
     {
+         options.MapInboundClaims = false;   
           options.TokenValidationParameters = new TokenValidationParameters
         {
             ValidateIssuer = true,
@@ -66,7 +70,8 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             ValidIssuer = jwtIssuer,
             ValidAudience = jwtAudience,
             IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSecret)),
-            NameClaimType = "sub"
+            NameClaimType = "sub",
+             RoleClaimType = "role"  
         };
 
         // ← NEW: log authentication results
@@ -87,7 +92,23 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     // Disable claim mapping globally
     System.IdentityModel.Tokens.Jwt.JwtSecurityTokenHandler.DefaultInboundClaimTypeMap.Clear();
 
-builder.Services.AddAuthorization();
+
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy("IsAdmin", p =>
+        p.RequireRole("Admin"));
+
+    options.AddPolicy("CanTrade", p =>
+        p.AddRequirements(new CanTradeRequirement()));
+
+    options.AddPolicy("IsVerified", p =>
+        p.AddRequirements(new IsVerifiedRequirement()));
+
+    options.AddPolicy("AccountNotFrozen", p =>
+        p.AddRequirements(new AccountNotFrozenRequirement()));
+});
+
+
 
 // ============================================
 // Auth services
@@ -98,6 +119,10 @@ builder.Services.AddSingleton<ITokenService>(_ =>
     new JwtTokenService(jwtSecret, jwtIssuer, jwtAudience));
 builder.Services.AddScoped<IAuthService, AuthService>();
 
+builder.Services.AddScoped<IAuthorizationHandler, CanTradeHandler>();
+builder.Services.AddScoped<IAuthorizationHandler, IsVerifiedHandler>();
+builder.Services.AddScoped<IAuthorizationHandler, AccountNotFrozenHandler>();
+
 // ============================================
 // Event sourcing services (Scoped — they use DbContext)
 // ============================================
@@ -105,6 +130,10 @@ builder.Services.AddScoped<IEventStore, SqlEventStore>();
 builder.Services.AddScoped<IWalletReadStore, SqlWalletReadStore>();
 builder.Services.AddScoped<WalletProjection>();
 builder.Services.AddScoped<GetBalanceQueryHandler>();
+
+
+
+
 
 var app = builder.Build();
 
@@ -174,7 +203,7 @@ app.MapPost("/wallet/deposit", async (
     wallet.ClearUncommittedEvents();
 
     return Results.Ok(new { balance = wallet.Balance });
-}).RequireAuthorization();
+}).RequireAuthorization("AccountNotFrozen");
 
 app.MapPost("/wallet/withdraw", async (
     decimal amount,
@@ -205,7 +234,7 @@ app.MapPost("/wallet/withdraw", async (
     wallet.ClearUncommittedEvents();
 
     return Results.Ok(new { balance = wallet.Balance });
-}).RequireAuthorization();
+}).RequireAuthorization("CanTrade");
 
 app.MapGet("/wallet/balance", async (
     HttpContext ctx,
@@ -216,6 +245,45 @@ app.MapGet("/wallet/balance", async (
     var balance = await handler.HandleAsync(query);
     return Results.Ok(new { balance });
 }).RequireAuthorization();
+
+
+
+
+// ============================================
+// ADMIN ENDPOINTS
+// ============================================
+
+app.MapPost("/admin/users/{id:guid}/verify", async (
+    Guid id,
+    IUserStore userStore) =>
+{
+    var user = await userStore.GetByIdAsync(id);
+    if (user is null)
+        return Results.NotFound(new { error = "User not found." });
+
+    user.IsVerified = true;
+    await userStore.SaveAsync(user);
+
+    return Results.Ok(new { user.Id, user.IsVerified });
+}).RequireAuthorization("IsAdmin");
+
+app.MapPost("/admin/users/{id:guid}/freeze", async (
+    Guid id,
+    IUserStore userStore) =>
+{
+    var user = await userStore.GetByIdAsync(id);
+    if (user is null)
+        return Results.NotFound(new { error = "User not found." });
+
+    user.IsFrozen = true;
+    await userStore.SaveAsync(user);
+
+    return Results.Ok(new { user.Id, user.IsFrozen });
+}).RequireAuthorization("IsAdmin");
+
+
+
+
 
 app.Run();
 

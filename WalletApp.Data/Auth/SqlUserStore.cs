@@ -27,34 +27,43 @@ public class SqlUserStore : IUserStore
         return record == null ? null : ToDomain(record);
     }
 
-    public async Task SaveAsync(User user)
+public async Task SaveAsync(User user)
+{
+    var record = await _db.Users.FindAsync(user.Id);
+
+    if (record == null)
     {
-        var record = await _db.Users.FindAsync(user.Id);
-
-        if (record == null)
+        _db.Users.Add(new UserRecord
         {
-            _db.Users.Add(new UserRecord
-            {
-                Id = user.Id,
-                Email = user.Email,
-                PasswordHash = user.PasswordHash,
-                CreatedAt = user.CreatedAt
-            });
-        }
-        else
-        {
-            record.Email = user.Email;
-            record.PasswordHash = user.PasswordHash;
-        }
-
-        await _db.SaveChangesAsync();
+            Id = user.Id,
+            Email = user.Email,
+            PasswordHash = user.PasswordHash,
+            CreatedAt = user.CreatedAt,
+            Role = user.Role,
+            IsVerified = user.IsVerified,
+            IsFrozen = user.IsFrozen
+        });
     }
+    else
+    {
+        record.Email = user.Email;
+        record.PasswordHash = user.PasswordHash;
+        record.Role = user.Role;
+        record.IsVerified = user.IsVerified;
+        record.IsFrozen = user.IsFrozen;
+    }
+
+    await _db.SaveChangesAsync();
+}
 
     private static User ToDomain(UserRecord r) => new User
     {
         Id = r.Id,
         Email = r.Email,
         PasswordHash = r.PasswordHash,
-        CreatedAt = r.CreatedAt
+        CreatedAt = r.CreatedAt,
+          Role = r.Role,
+    IsVerified = r.IsVerified,
+    IsFrozen = r.IsFrozen
     };
 }

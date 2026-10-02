@@ -1229,7 +1229,10 @@
         },
         "runtime": {
           "bin/placeholder/WalletApp.Core.dll": {}
-        }
+        },
+        "frameworkReferences": [
+          "Microsoft.AspNetCore.App"
+        ]
       },
       "WalletApp.Data/1.0.0": {
         "type": "project",
