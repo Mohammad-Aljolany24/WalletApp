@@ -16,7 +16,7 @@ using WalletApp.Data.ReadModels;
 using Microsoft.AspNetCore.Authorization;                                    // <-- add
 using WalletApp.API.Authorization;                                            // <-- add
 using WalletApp.Core.Auth.Requirements;    
-
+using WalletApp.Core.Events;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -163,6 +163,26 @@ app.MapPost("/auth/login", async (LoginRequest req, IAuthService auth) =>
     return Results.Ok(new { token });
 });
 
+
+app.MapGet("/auth/me", async (
+    HttpContext ctx,
+    IUserStore userStore) =>
+{
+    var userId = GetUserId(ctx);
+    var user = await userStore.GetByIdAsync(userId);
+    if (user is null)
+        return Results.NotFound(new { error = "User not found." });
+
+    return Results.Ok(new
+    {
+        user.Id,
+        user.Email,
+        user.Role,
+        user.IsVerified,
+        user.IsFrozen
+    });
+}).RequireAuthorization();
+
 // ============================================
 // WALLET ENDPOINTS (protected)
 // ============================================
@@ -247,6 +267,38 @@ app.MapGet("/wallet/balance", async (
 }).RequireAuthorization();
 
 
+app.MapGet("/wallet/transactions", async (
+    HttpContext ctx,
+    IEventStore eventStore) =>
+{
+    var userId = GetUserId(ctx);
+    var events = await eventStore.GetEventsAsync(userId);
+
+    var transactions = events
+        .Select(e => e switch
+        {
+            FundsDeposited d => new
+            {
+                Type = "Deposited",
+                Amount = d.Amount,
+                OccurredAt = d.OccurredAt
+            },
+            FundsWithdrawn w => new
+            {
+                Type = "Withdrawn",
+                Amount = w.Amount,
+                OccurredAt = w.OccurredAt
+            },
+            _ => null
+        })
+        .Where(t => t is not null)
+        .Reverse()  // newest first
+        .ToList();
+
+    return Results.Ok(transactions);
+}).RequireAuthorization();
+
+
 
 
 // ============================================
@@ -279,6 +331,21 @@ app.MapPost("/admin/users/{id:guid}/freeze", async (
     await userStore.SaveAsync(user);
 
     return Results.Ok(new { user.Id, user.IsFrozen });
+}).RequireAuthorization("IsAdmin");
+
+app.MapGet("/admin/users", async (IUserStore userStore) =>
+{
+    var users = await userStore.GetAllAsync();
+
+    return Results.Ok(users.Select(u => new
+    {
+        u.Id,
+        u.Email,
+        u.Role,
+        u.IsVerified,
+        u.IsFrozen,
+        u.CreatedAt
+    }));
 }).RequireAuthorization("IsAdmin");
 
 

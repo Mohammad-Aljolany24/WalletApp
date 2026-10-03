@@ -66,4 +66,13 @@ public async Task SaveAsync(User user)
     IsVerified = r.IsVerified,
     IsFrozen = r.IsFrozen
     };
+
+    public async Task<List<User>> GetAllAsync()
+{
+    var records = await _db.Users
+        .OrderBy(u => u.CreatedAt)
+        .ToListAsync();
+
+    return records.Select(ToDomain).ToList();
+}
 }
