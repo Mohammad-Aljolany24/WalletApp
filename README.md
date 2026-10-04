@@ -16,6 +16,7 @@ This project is **Phase 1** of a three-phase build: `WalletApp → MatchEngine �
 - **Testing discipline** — 61 tests (30 unit + 31 integration), all passing
 - **Optimistic concurrency safety** — unique index on `(AggregateId, Version)`
 - **Policy-based authorization** — `CanTrade`, `IsVerified`, `AccountNotFrozen`, `IsAdmin`
+- **Typed domain exceptions + ProblemDetails** — RFC 7807 error responses, no leaked internal messages
 - **React + TypeScript frontend** — Vite 8, React 19, MUI 9, React Router 7
 
 ---
@@ -45,8 +46,9 @@ Read side:   Query → Query Handler → Read Model → Response
 
 ```
 WalletApp/
-├── WalletApp.API/          # Endpoints, Program.cs, config
-├── WalletApp.Core/         # Domain: aggregates, events, interfaces, projections, queries
+├── WalletApp.API/          # Endpoints, Program.cs, exception handler, config
+├── WalletApp.Core/         # Domain: aggregates, events, exceptions, interfaces,
+│                           #         projections, queries
 ├── WalletApp.Data/         # Infrastructure: EF Core, SQL Server, JWT, BCrypt
 ├── WalletApp.Tests/        # Unit + integration tests (61)
 └── frontend/               # Vite + React + TS + MUI
@@ -62,6 +64,7 @@ WalletApp/
 - **Business rules live in aggregates.** Not in controllers, not in services.
 - **Auth is not event-sourced.** Users live in a plain SQL table (`Users`). Auth is infrastructure.
 - **Policies read fresh state.** A user freeze takes effect on the *next request*, not the next login. The policy handler queries `IUserStore`, not the JWT.
+- **Domain exceptions know nothing about HTTP.** `WalletApp.Core` declares *what* went wrong; `WalletApp.API` maps it to a status code.
 
 ---
 
@@ -72,6 +75,7 @@ WalletApp/
 - **.NET 10** / ASP.NET Core Web API
 - **Entity Framework Core 10** + **SQL Server Express**
 - **JWT** + **BCrypt.Net**
+- **ProblemDetails** (RFC 7807) via `IExceptionHandler`
 - **Swagger UI** with Bearer authentication
 - **xUnit** + **FluentAssertions** + **Moq** + **WebApplicationFactory**
 - **Swashbuckle** for OpenAPI documentation
@@ -184,6 +188,35 @@ dotnet test --filter "FullyQualifiedName~Integration"
 
 ---
 
+## Error Handling
+
+All error responses use **RFC 7807 ProblemDetails**. The domain throws typed exceptions; `GlobalExceptionHandler` maps them to status codes centrally — no per-endpoint try/catch.
+
+| Exception | Status | When |
+|-----------|--------|------|
+| `ValidationException` | 400 | Bad input (e.g. deposit amount ≤ 0) |
+| `InsufficientFundsException` | 400 | Withdrawal exceeds balance (extends `ValidationException`) |
+| `NotFoundException` | 404 | Aggregate or user not found |
+| `UnauthorizedException` | 401 | Missing/invalid identity |
+| `ConcurrencyException` | 409 | Version conflict on append |
+| *(anything else)* | 500 | Unexpected — message suppressed, full exception logged |
+
+Example 400 response:
+
+```json
+{
+  "type": "https://walletapp.local/errors/insufficient-funds",
+  "title": "Insufficient funds.",
+  "status": 400,
+  "detail": "You requested 99999, but only 5 is available.",
+  "traceId": "0HN7G2K..."
+}
+```
+
+**Internal 500 messages are never leaked to clients** — only the `traceId` is returned, which correlates to the structured log entry.
+
+---
+
 ## Database
 
 ### Tables
@@ -235,7 +268,8 @@ dotnet test --filter "FullyQualifiedName~Integration"
 - [x] **Policy-based authorization** — `CanTrade`, `IsVerified`, `AccountNotFrozen`, `IsAdmin`
 - [x] **React + TypeScript frontend** — Vite, React 19, MUI, React Router 7
 - [x] **Phase 1 complete** — wallet works end-to-end: auth, deposit, withdraw, transaction list, admin verify/freeze
-- [ ] **Phase 1.5** — ProblemDetails handler, idempotency keys, pagination, rate limiting, Serilog, health checks, API versioning, refresh tokens, CI
+- [x] **ProblemDetails error handling** — typed domain exceptions, no leaked 500 messages
+- [ ] **Phase 1.5 (in progress)** — AuthService cleanup, GitHub Actions CI, idempotency keys, pagination, Serilog, health checks, rate limiting, API versioning, refresh tokens
 - [ ] **Phase 2 — MatchEngine** — `OrderBook` + `Order` aggregates, price-time priority matching, SignalR
 - [ ] **Phase 2.5** — Docker Compose, Redis order book cache, Hangfire background jobs
 - [ ] **Phase 3 — Full trading platform** — KYC tiers, multiple symbols, candlestick charts, fiat off-ramp withdrawals
@@ -267,12 +301,14 @@ Some things learned while building this:
 6. **Concurrency** — a version number + unique index is the entire enforcement mechanism. No code can bypass it.
 7. **CORS ordering.** `app.UseCors("Frontend")` must come before `UseAuthentication` and `UseAuthorization`. Symptom when wrong: browser shows "blocked by CORS policy" but the backend logs nothing — the request never reached the endpoint.
 8. **`FrameworkReference Microsoft.AspNetCore.App`** is required on any class library that declares `IAuthorizationRequirement`. Without it, custom requirements fail to compile in `WalletApp.Core`.
+9. **`GlobalExceptionHandler` belongs in the API project, not Core.** It uses `IExceptionHandler`, `HttpContext`, `StatusCodes`, `ProblemDetails` — all ASP.NET Core types. Core is a class library; the Web SDK's implicit usings don't apply there. Rule of thumb: Core declares *what* went wrong, API decides *how* to tell the client.
+10. **Stale test expectations after status-code changes.** When an endpoint's status code changes, grep the integration tests for the old code. This bit twice: `AuthEndpointTests` (500 → 400/401 for auth) and `WalletEndpointTests.Withdraw_MoreThanBalance_ReturnsError` (500 → 400 once ProblemDetails landed). The second was a test correctly asserting the *old* behavior; the endpoint changing to be *more* correct required the assertion to move with it.
 
 ---
 
 ## What's Next
 
-Phase 1.5 adds the operational layer — everything a senior engineer expects to see that a domain-focused build skips: ProblemDetails-based error responses, idempotency keys, pagination, rate limiting, structured logging with correlation IDs, health checks, API versioning, refresh tokens, and CI.
+Phase 1.5 adds the operational layer — everything a senior engineer expects to see that a domain-focused build skips: AuthService cleanup, GitHub Actions CI, idempotency keys, pagination, rate limiting, structured logging with correlation IDs, health checks, API versioning, and refresh tokens.
 
 That layer is added *after* the wallet works, on purpose: it gets copied into Phase 2 (MatchEngine) for free, and it means every subsequent phase starts from a stronger base than the last.
 
