@@ -49,7 +49,7 @@ public class AuthEndpointTests : IClassFixture<CustomWebApplicationFactory<Progr
             password = "password123"
         });
 
-        response.StatusCode.Should().Be(HttpStatusCode.InternalServerError);
+       response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
     // ============================================
@@ -87,7 +87,7 @@ public class AuthEndpointTests : IClassFixture<CustomWebApplicationFactory<Progr
             password = "password123"
         });
 
-        response.StatusCode.Should().Be(HttpStatusCode.InternalServerError);
+       response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
 
     [Fact]
@@ -105,7 +105,7 @@ public class AuthEndpointTests : IClassFixture<CustomWebApplicationFactory<Progr
             password = "wrong_password"
         });
 
-        response.StatusCode.Should().Be(HttpStatusCode.InternalServerError);
+        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
 
     // Response shapes

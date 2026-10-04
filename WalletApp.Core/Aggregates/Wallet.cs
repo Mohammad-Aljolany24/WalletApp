@@ -1,4 +1,5 @@
 using WalletApp.Core.Events;
+using WalletApp.Core.Exceptions;
 
 namespace WalletApp.Core.Aggregates;
 
@@ -14,7 +15,7 @@ public class Wallet
     public void Deposit(decimal amount)
     {
         if (amount <= 0)
-            throw new Exception("Deposit amount must be positive");
+            throw new ValidationException("Deposit amount must be positive.");
 
         var evt = new FundsDeposited
         {
@@ -30,10 +31,10 @@ public class Wallet
     public void Withdraw(decimal amount)
     {
         if (amount <= 0)
-            throw new Exception("Withdrawal amount must be positive");
+            throw new ValidationException("Withdrawal amount must be positive.");
 
         if (amount > Balance)
-            throw new Exception("Insufficient funds");
+            throw new InsufficientFundsException(amount, Balance);
 
         var evt = new FundsWithdrawn
         {

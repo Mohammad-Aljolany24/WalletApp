@@ -2,553 +2,709 @@
 
 ## THE VISION (read this first)
 
-This project has three phases:
+Three phases:
 
-### Phase 1 — WalletApp (CURRENT — nearly complete)
-A simple event-sourced wallet application. Purpose: **learn event sourcing and CQRS on a small, safe domain** before applying it to something hard. Not a portfolio piece by itself — a training ground.
+- **Phase 1 — WalletApp** (nearly complete): event-sourced wallet. Learn event sourcing + CQRS on a small domain. Has a working React frontend.
+- **Phase 2 — MatchEngine** (next): event-sourced matching engine. The portfolio project. Reuses 100% of infrastructure.
+- **Phase 3 — Full Trading Platform** (future): KYC, multiple symbols, charts, admin, SignalR, real market data.
 
-### Phase 2 — MatchEngine (NEXT)
-An event-sourced **matching engine** — the backend of a stock/crypto exchange. This is the **portfolio project**. It reuses 100% of the infrastructure built in Phase 1 and adds:
-- `OrderBook` aggregate with price-time priority matching
-- `Order` aggregate
-- Events: `OrderPlaced`, `OrderPartiallyFilled`, `OrderFullyFilled`, `OrderCancelled`, `TradeExecuted`
-- Real-time order book via SignalR
-- React frontend
+**Rule adopted mid-Phase-1:** every phase ends with a working UI. Not backend-only.
 
-### Phase 3 — Full Trading Platform (FUTURE — scalable target)
-The MatchEngine grows into a **full trading website**:
-- User accounts with KYC/verification workflows
-- Order placement UI (market, limit, stop orders)
-- Real-time order book display
-- Portfolio and trade history
-- Charts (candlesticks, volume)
-- Deposit/withdrawal of funds
-- Admin panel (freeze users, view all activity, audit logs)
-- SignalR for live market data
-- Optional: integration with free market data APIs (Finnhub, Alpaca paper trading) for real symbols
-
-**Everything must be built so it scales into Phase 3.** That's why we're doing the wallet first — the patterns learned here apply 1:1 to the matching engine.
-
-**Target market:** Jordan fintech job postings explicitly ask for CQRS, Event Sourcing, SQL depth, JWT, React + TypeScript. This project targets those roles specifically.
+Target market: Jordan fintech jobs asking for CQRS, Event Sourcing, SQL depth, JWT, React + TypeScript.
 
 ---
 
 ## STACK
 
+### Backend
 - **.NET 10** (ASP.NET Core Web API)
-- **4 projects:**
-  - `WalletApp.API` — endpoints, `Program.cs`, config
-  - `WalletApp.Core` — domain: aggregates, events, interfaces, projections, queries
-  - `WalletApp.Data` — infrastructure: EF Core, SQL Server, JWT, BCrypt
-  - `WalletApp.Tests` — unit + integration tests
-- **EF Core 10** + **SQL Server Express** (instance `SQLEXPRESS`, database `WalletAppDb`)
+- **4 projects:** `WalletApp.API`, `WalletApp.Core`, `WalletApp.Data`, `WalletApp.Tests`
+- **EF Core 10** + **SQL Server Express** (`.\SQLEXPRESS`, db `WalletAppDb`)
 - **JWT auth** with BCrypt password hashing
-- **Swagger UI** with Bearer auth for manual testing
-- **xUnit + FluentAssertions + Moq + WebApplicationFactory** for tests
-- **Frontend (Phase 3):** React 18 + TypeScript + Vite + MUI + TanStack Query + Zustand + React Router
-- **Real-time (Phase 2):** SignalR
+- **Swagger UI** with Bearer auth
+- **xUnit + FluentAssertions + Moq + WebApplicationFactory**
+- **CORS** configured for `http://localhost:5173`
+
+### Frontend (added Phase 1)
+- **Vite + TypeScript (strict)**
+- **React 18** — function components + hooks only
+- **React Router v6**
+- **React Hook Form** — form validation
+- **`fetch` + custom wrapper** (no axios)
+- **React Context** — auth + refresh invalidation
+- **MUI** — component library with responsive system
+- **Inter** font via `@fontsource/inter`
+- **Explicitly NOT used:** TanStack Query, Zustand, Zod. Build the small version yourself first, adopt later when you feel the pain.
 
 ---
 
 ## ARCHITECTURE
 
 ### Core principles
-- **Event Sourcing** — events are the source of truth, never updated, never deleted
+- **Event Sourcing** — events are truth, never updated, never deleted
 - **CQRS** — write side (commands → events) separate from read side (queries → read models)
-- **Write side flow:** load events → rehydrate aggregate → run business logic → append events → run projections
-- **Read side flow:** query → read model → return (NO rehydration)
-- **Auth is NOT event-sourced** — Users live in a plain SQL table (`Users`)
-- **Wallet ownership:** Wallet ID = User ID. Server reads user ID from JWT `sub` claim.
-- **DI lifetimes:** anything using `DbContext` is `Scoped`. Stateless helpers can be `Singleton`.
+- **Write flow:** load events → rehydrate aggregate → business logic → append events → run projections
+- **Read flow:** query → read model → return (NO rehydration)
+- **Auth is NOT event-sourced** — Users live in a plain SQL table
+- **Wallet ID = User ID.** Server reads user ID from JWT `sub` claim
+- **DI lifetimes:** anything using `DbContext` is Scoped
 
 ### Solution structure
 ```
 WalletApp/
 ├── WalletApp.API/
 │   ├── Program.cs                  (has `public partial class Program { }` at bottom)
+│   ├── Authorization/
+│   │   └── PolicyHandlers.cs       (CanTrade, IsVerified, AccountNotFrozen)
 │   ├── appsettings.json
 │   └── appsettings.Development.json
 ├── WalletApp.Core/
-│   ├── Aggregates/
-│   │   └── Wallet.cs
-│   ├── Events/
-│   │   ├── IEvent.cs
-│   │   ├── FundsDeposited.cs
-│   │   └── FundsWithdrawn.cs
-│   ├── EventStore/
-│   │   └── IEventStore.cs
+│   ├── Aggregates/Wallet.cs
+│   ├── Events/ (IEvent, FundsDeposited, FundsWithdrawn)
+│   ├── EventStore/ (IEventStore, ConcurrencyException)
 │   ├── Auth/
-│   │   ├── User.cs
+│   │   ├── User.cs                 (Id, Email, PasswordHash, CreatedAt, Role, IsVerified, IsFrozen)
 │   │   ├── IUserStore.cs
 │   │   ├── IPasswordHasher.cs
 │   │   ├── ITokenService.cs
 │   │   ├── IAuthService.cs
-│   │   └── AuthService.cs
-│   ├── Projections/
-│   │   └── WalletProjection.cs
-│   ├── Queries/
-│   │   ├── GetBalanceQuery.cs
-│   │   └── GetBalanceQueryHandler.cs
-│   └── ReadModels/
-│       ├── WalletReadModel.cs
-│       └── IWalletReadStore.cs
+│   │   ├── AuthService.cs
+│   │   └── Requirements/
+│   │       ├── CanTradeRequirement.cs
+│   │       ├── IsVerifiedRequirement.cs
+│   │       └── AccountNotFrozenRequirement.cs
+│   ├── Projections/WalletProjection.cs
+│   ├── Queries/ (GetBalanceQuery, GetBalanceQueryHandler)
+│   └── ReadModels/ (WalletReadModel, IWalletReadStore)
 ├── WalletApp.Data/
 │   ├── AppDbContext.cs
-│   ├── Entities/
-│   │   ├── EventRecord.cs
-│   │   ├── WalletReadRecord.cs
-│   │   └── UserRecord.cs
-│   ├── Auth/
-│   │   ├── BcryptPasswordHasher.cs
-│   │   ├── JwtTokenService.cs
-│   │   └── SqlUserStore.cs
-│   ├── EventStore/
-│   │   └── SqlEventStore.cs
-│   ├── ReadModels/
-│   │   └── SqlWalletReadStore.cs
+│   ├── Entities/ (EventRecord, WalletReadRecord, UserRecord)
+│   ├── Auth/ (BcryptPasswordHasher, JwtTokenService, SqlUserStore)
+│   ├── EventStore/SqlEventStore.cs
+│   ├── ReadModels/SqlWalletReadStore.cs
 │   └── Migrations/
-└── WalletApp.Tests/
-    ├── Unit/
-    │   ├── WalletTests.cs              (15 tests)
-    │   ├── WalletProjectionTests.cs    (6 tests)
-    │   └── AuthServiceTests.cs         (9 tests)
-    └── Integration/
-        ├── CustomWebApplicationFactory.cs
-        ├── TestHelpers.cs
-        ├── AuthEndpointTests.cs        (5 tests)
-        └── WalletEndpointTests.cs      (7 tests)
+├── WalletApp.Tests/
+│   ├── Unit/ (WalletTests 15, WalletProjectionTests 6, AuthServiceTests 9)
+│   └── Integration/
+│       ├── CustomWebApplicationFactory.cs
+│       ├── TestHelpers.cs
+│       ├── AuthEndpointTests.cs
+│       ├── WalletEndpointTests.cs
+│       ├── AuthorizationTests.cs
+│       ├── ConcurrencyTests.cs
+│       └── NewEndpointsTests.cs
+└── frontend/
+    ├── index.html
+    ├── package.json
+    ├── tsconfig.json
+    ├── vite.config.ts
+    ├── .env.development            (VITE_API_URL=http://localhost:5138)
+    └── src/
+        ├── main.tsx                (ThemeProvider + CssBaseline + Inter imports)
+        ├── App.tsx                 (BrowserRouter + AuthProvider + RefreshProvider + Routes)
+        ├── theme.ts                (Slate & Ledger theme)
+        ├── api/
+        │   ├── client.ts           (fetch wrapper: JWT, 401 vs 403 vs network)
+        │   ├── auth.ts             (register, login, me)
+        │   └── wallet.ts           (getBalance, deposit, getTransactions)
+        ├── context/
+        │   ├── AuthContext.tsx
+        │   └── RefreshContext.tsx
+        ├── hooks/useApi.ts
+        ├── components/
+        │   ├── Layout.tsx
+        │   ├── ProtectedRoute.tsx
+        │   ├── AdminRoute.tsx
+        │   ├── BalanceCard.tsx
+        │   └── DepositForm.tsx
+        └── pages/                  (lowercase or Capital consistently — pick one)
+            ├── LoginPage.tsx
+            ├── RegisterPage.tsx
+            ├── DashboardPage.tsx
+            ├── AdminPage.tsx
+            └── NotFoundPage.tsx
 ```
+
+**Folder naming rule:** pick `pages` (lowercase) or `Pages` (capital) and use the same in every import. Windows treats them as the same folder; Linux treats them as different. Be consistent so a CI run on Linux doesn't break.
 
 ---
 
 ## STEPS COMPLETED
 
-- [x] **Step 1:** Solution setup (3 projects), events (`IEvent`, `FundsDeposited`, `FundsWithdrawn`)
-- [x] **Step 2:** In-memory event store (superseded by Step 6)
-- [x] **Step 3:** `Wallet` aggregate (Deposit, Withdraw, Apply, Rehydrate, ClearUncommittedEvents)
-- [x] **Step 4:** CQRS read side (`WalletReadModel`, `WalletProjection`, `GetBalanceQueryHandler`)
-- [x] **Step 5:** JWT auth (`User`, `AuthService`, `JwtTokenService`, register/login)
-- [x] **Step 6:** SQL Server persistence for events + read model (EF Core migrations)
-- [x] **Step 7:** Swagger UI with JWT Bearer auth (paste-token-only UX)
-- [x] **Step 7.5:** Persist users to SQL (`UserRecord`, `SqlUserStore`, migration `AddUsersTable`, DI lifetimes fixed)
-- [x] **Step 8:** Test project setup + unit tests
-  - 15 `WalletTests` (deposit, withdraw, rehydration, events, validation)
-  - 6 `WalletProjectionTests` (state updates from events, using in-memory fake store)
-  - 9 `AuthServiceTests` (register, login, validation, using Moq)
-- [x] **Step 9:** Integration tests
-  - `CustomWebApplicationFactory` — replaces SQL Server with in-memory DB
-  - `TestHelpers.RegisterAndLoginAsync` helper
-  - 5 `AuthEndpointTests` (register, login, errors)
-  - 7 `WalletEndpointTests` (auth requirement, full flow, user isolation, business rules)
-  - **42 tests total, all passing**
+### Backend — Phase 1
+- [x] **Step 1:** Solution setup, events
+- [x] **Step 2:** In-memory event store (superseded)
+- [x] **Step 3:** `Wallet` aggregate
+- [x] **Step 4:** CQRS read side
+- [x] **Step 5:** JWT auth
+- [x] **Step 6:** SQL Server persistence
+- [x] **Step 7:** Swagger with Bearer auth
+- [x] **Step 7.5:** Users to SQL
+- [x] **Step 8:** Unit tests (30)
+- [x] **Step 9:** Integration tests (12)
+- [x] **Step 10:** Optimistic concurrency
+  - `Version` on `Wallet` + `EventRecord`
+  - Unique index `(AggregateId, Version)`
+  - `IEventStore.AppendAsync(guid, IReadOnlyCollection<IEvent>, int expectedVersion)`
+  - `SqlEventStore` pre-check + unique constraint catch
+  - `ConcurrencyException` → 409
+  - Migration `AddEventVersion` with `ROW_NUMBER()` backfill
+- [x] **Step 11:** Policy-based authorization
+  - `Role`, `IsVerified`, `IsFrozen` on `User` / `UserRecord`
+  - Migration `AddUserPolicyFields` (Role defaults to `"User"`)
+  - `role` claim in JWT; `RoleClaimType = "role"` in `TokenValidationParameters`
+  - **Fix:** `options.MapInboundClaims = false` — the .NET 8+ replacement for the dead `JwtSecurityTokenHandler.DefaultInboundClaimTypeMap.Clear()`
+  - Requirements + handlers for `CanTrade`, `IsVerified`, `AccountNotFrozen`
+  - `IsAdmin` uses `RequireRole("Admin")` (no DB hit)
+  - Endpoints: `POST /admin/users/{id}/verify`, `POST /admin/users/{id}/freeze`
+  - Deposit → `AccountNotFrozen`; Withdraw → `CanTrade`
+  - `FrameworkReference Microsoft.AspNetCore.App` on `WalletApp.Core`
+
+### Phase 1 backend extension (added for frontend)
+- [x] **B1:** `GET /auth/me`
+- [x] **B2:** `GET /wallet/transactions`
+- [x] **B3:** `GET /admin/users`
+- [x] `IUserStore.GetAllAsync()` added
+- [x] Deleted dead `InMemoryEventStore.cs` and `InMemoryUserStore.cs`
+- [x] **CORS policy "Frontend"** for `http://localhost:5173`
+- [x] Auth endpoints catch exceptions and return proper 400 / 401
+
+### Phase 1 frontend
+- [x] **F0:** Vite + TS + React + MUI + Inter + Slate & Ledger theme
+- [x] **F1:** React Router with Layout route, empty pages, 404, `/` → `/dashboard`
+- [x] **F2:** `AuthContext` + Login/Register forms + `ProtectedRoute` + `AdminRoute` + navbar
+  - `AuthContext` only clears token on **401**, keeps session on network errors
+  - `ProtectedRoute` shows error screen with Retry + Log out when unreachable
+- [x] **F3:** `useApi` hook + `BalanceCard` (three-state render pattern)
+- [x] **F4:** `RefreshContext` + `DepositForm`
+  - Deposit updates balance without page refresh
+  - Validation for negative / zero / empty amounts
+  - Frozen user handling
+
+**Test count: 61 passing.**
 
 ---
 
 ## STEPS REMAINING
 
-### Phase 1 — WalletApp (finish these)
+### Frontend — finish Phase 1
+- [ ] **F5:** `WithdrawForm` — disabled if `!user.isVerified` or `user.isFrozen`; handles 403 / 409
+- [ ] **F6:** `TransactionList` — consumes `/wallet/transactions`
+- [ ] **F7:** `AdminPage` — user table + verify/freeze actions
+- [ ] **F8:** Polish — loading skeletons, empty states, favicon, README, maybe dark mode toggle
 
-- [ ] **Step 10:** Optimistic concurrency
-  - Add `Version` to `Wallet` aggregate (private set, incremented in `Apply`)
-  - Add `Version` to `EventRecord` entity
-  - Add unique index on `(AggregateId, Version)` in `AppDbContext`
-  - Update `IEventStore.AppendAsync` signature to take `expectedVersion`
-  - Update `SqlEventStore` to check version and throw `ConcurrencyException` on mismatch
-  - Update endpoints to pass `expectedVersion` from rehydrated wallet
-  - Create migration `AddEventVersion`
-  - Add integration test: two clients write concurrently → one succeeds, one fails
+### Phase 1.5 — Wallet hardening (after F8, before MatchEngine)
 
-- [ ] **Step 11:** Policy-based authorization
-  - Add to `User` and `UserRecord`: `Role` (string, default "User"), `IsVerified` (bool), `IsFrozen` (bool)
-  - Migration `AddUserPolicyFields`
-  - Define policies in `Program.cs`:
-    - `CanTrade` — user is verified AND not frozen
-    - `IsAdmin` — role-based
-    - `IsVerified` — flag check
-    - `AccountNotFrozen` — flag check
-  - Create `IAuthorizationHandler` for `CanTrade` (fetches user from `IUserStore`)
-  - Add admin endpoints: `POST /admin/users/{id}/verify`, `POST /admin/users/{id}/freeze`
-  - Apply policies to wallet endpoints (`.RequireAuthorization("CanTrade")`)
-  - Add integration tests for each policy scenario
+Every item here gets copied to MatchEngine for free. Skipping it means copying a weaker base.
 
-### Phase 2 — MatchEngine (the portfolio project)
+- [ ] **ProblemDetails global exception handler.** Replaces per-endpoint try/catch. `ValidationException`, `NotFoundException`, `AuthenticationException` map to 400/404/401 centrally. Wallet currently returns 500 on `Insufficient funds`.
+- [ ] **Idempotency keys on write endpoints.** Client sends `Idempotency-Key` header; server dedupes. Prevents double-charge on retry.
+- [ ] **Pagination on list endpoints.** `/wallet/transactions` and `/admin/users`. Cursor-based: `?afterId=...&limit=50`.
+- [ ] **Rate limiting.** `AddRateLimiter` built-in. Per-user + per-IP.
+- [ ] **Serilog structured logging + correlation IDs.**
+- [ ] **Health checks.** `/health` (liveness), `/health/ready` (readiness).
+- [ ] **API versioning.** `/api/v1/...` via `Asp.Versioning.Mvc`.
+- [ ] **Refresh tokens.** Users currently re-login every hour.
+- [ ] **Password reset.** Email-token flow.
+- [ ] **GitHub Actions CI.** Build + test on push.
 
-- [ ] **Step 12:** Rename solution to `MatchEngine`
-  - Option A: Rename folder + projects + namespaces
-  - Option B: Keep `WalletApp` as its own portfolio piece and start fresh `MatchEngine` copying infrastructure (recommended)
-  - Reuse: `IEventStore`, `SqlEventStore`, `IWalletReadStore` pattern, projection pattern, JWT, migrations, test setup
+### Phase 2 — MatchEngine (during the build)
 
-- [ ] **Step 13:** Add `OrderBook` aggregate + matching algorithm
-  - Events: `OrderPlaced`, `OrderPartiallyFilled`, `OrderFullyFilled`, `OrderCancelled`, `TradeExecuted`
-  - Price-time priority matching: best price first, ties broken by earliest order
-  - In-memory order book data structures (`SortedDictionary<decimal, Queue<Order>>` for bids and asks)
-  - Support market and limit orders only in v1
-  - **Unit test the matching algorithm heavily** — this is the core logic
+Reuses everything from WalletApp. New domain:
 
-- [ ] **Step 14:** Add `Order` aggregate
-  - Track individual order lifecycle
-  - Events per order
+- [ ] **Step 12:** Option B — keep WalletApp as its own portfolio piece, start fresh `MatchEngine` copying infrastructure
+- [ ] **Step 13:** `OrderBook` aggregate + matching algorithm (price-time priority)
+- [ ] **Step 14:** `Order` aggregate
+- [ ] **Step 15:** New projections: `OrderBookProjection`, `TradeHistoryProjection`
+- [ ] **Step 16:** New queries: `GetOrderBookQuery`, `GetTradeHistoryQuery`, `GetPortfolioQuery`
+- [ ] **Step 17:** SignalR for live order book
+- [ ] **Step 18:** React frontend for MatchEngine (same stack as WalletApp frontend)
 
-- [ ] **Step 15:** New projections
-  - `OrderBookProjection` — keeps the read-model order book updated
-  - `TradeHistoryProjection` — records all executed trades
-  - `WalletProjection` — reuse from WalletApp
+MatchEngine-specific additions:
+- [ ] SignalR real-time updates
+- [ ] Recharts for price history
+- [ ] Load testing the matching engine
+- [ ] Performance profiling under high throughput
 
-- [ ] **Step 16:** New queries
-  - `GetOrderBookQuery` → returns bids/asks
-  - `GetTradeHistoryQuery` → user's trades
-  - `GetPortfolioQuery` → user's positions
+### Phase 2.5 — MatchEngine hardening (after MatchEngine works, before Phase 3)
 
-- [ ] **Step 17:** SignalR for real-time order book updates
-  - Hub: `OrderBookHub`
-  - Clients subscribe to symbol updates
-  - Server broadcasts on `OrderPlaced`, `TradeExecuted`, etc.
+- [ ] **Docker + Docker Compose.** API + SQL Server + Redis.
+- [ ] **Redis caching for order books.**
+- [ ] **Hangfire background jobs.** Settlement polling, price alerts.
+- [ ] **Audit log query endpoint.** Free from event sourcing.
+- [ ] **CI/CD to a real environment.** Deploy pipeline.
 
-- [ ] **Step 18:** React frontend
-  - Login / register
-  - Order placement form
-  - Live order book display
-  - Portfolio view
-  - Trade history
-  - Charts (Recharts)
+### Phase 3 — Full Trading Platform
 
-### Phase 3 — Full Trading Platform (future scope)
+Full feature list and hardening items live in the **HARDENING PHASES** section above. Before starting Phase 3, complete Phase 1.5 and Phase 2.5.
 
-- [ ] KYC workflow (upload ID, admin approval)
+Withdrawal model decision is deferred to Phase 3 — see the WITHDRAWAL section for the design.
+
+Features:
+- [ ] **Withdrawal Model B (fiat off-ramp)** — see WITHDRAWAL section
+- [ ] KYC workflow (multi-tier `VerificationLevel` instead of boolean)
 - [ ] Multiple order types (stop-loss, IOC, FOK)
 - [ ] Multiple symbols (BTC, ETH, AAPL)
 - [ ] Candlestick charts (OHLC aggregation projection)
-- [ ] Price alerts (background jobs)
+- [ ] Price alerts (Hangfire)
 - [ ] Admin dashboard (freeze users, view all activity, audit log query)
 - [ ] Free market data integration (Finnhub, Alpaca paper trading)
 - [ ] Email/SMS notifications on order fills
-- [ ] Rate limiting per user
-- [ ] API versioning (`/api/v1/...`)
 
-### Enterprise layer (after Phase 3, for interviews)
+### Deferred — Know, don't build
 
-- [ ] Serilog structured logging + correlation IDs
-- [ ] Health checks (`/health`, `/health/ready`)
-- [ ] ProblemDetails error responses (business errors return 400, not 500)
-- [ ] Idempotency keys on write endpoints
-- [ ] Docker + Docker Compose
-- [ ] GitHub Actions CI/CD
-- [ ] Redis caching
-- [ ] Hangfire background jobs
+Mention in interviews, don't implement:
+
+- Multi-tenancy
+- Kafka / RabbitMQ event streaming
+- Microservices split
+- Saga pattern
+- Database sharding
+- Read replicas
+- Polly circuit breakers
+- Blue-green deploys
+- Feature flags (LaunchDarkly-style)
+- HTTPS termination (nginx / Caddy) — cloud providers handle it
+
+### Framing for interviews
+
+> "The architecture is production-grade — event sourcing with optimistic concurrency, CQRS, policy-based auth with fresh-state handlers. The operational concerns — idempotency keys, structured logging, health checks, CI/CD — were added in Phase 1.5, after the wallet was working, precisely so MatchEngine could inherit them. I deliberately separated domain architecture from ops because getting event sourcing right is where projects fail, whereas the ops layer is a fixed, well-understood checklist."
 
 ---
 
 ## TESTING STRATEGY
 
-### When to test — the rule
 **Test each piece right after it works, before moving on.**
-1. Write a method
-2. Test manually (Swagger)
-3. It works
-4. **Write 2-3 tests for it immediately**
-5. Run them. Pass. Move on.
 
-### Current coverage (42 tests, all passing)
+### Current coverage (61 tests)
 
-**Unit tests (30):**
-- `Wallet` aggregate — happy paths, validation, event production, rehydration
-- `WalletProjection` — deposit creates row, deposit adds, withdraw subtracts, unknown events ignored
-- `AuthService` — register, login, email normalization, password hashing, validation
+**Unit (30):** Wallet aggregate, WalletProjection, AuthService
 
-**Integration tests (12):**
-- `AuthEndpointTests` — register, login, duplicate email, unknown email, wrong password
-- `WalletEndpointTests` — 401 without token, full flow, multiple deposits, withdraw, insufficient funds, user isolation
+**Integration (31):**
+- `AuthEndpointTests` — register, login, errors
+- `WalletEndpointTests` — auth requirement, full flow, user isolation
+- `AuthorizationTests` — policy paths, freeze-immediate-effect, admin workflows
+- `ConcurrencyTests` — real SQL Server, concurrent append, one wins
+- `NewEndpointsTests` — `/auth/me`, `/wallet/transactions`, `/admin/users`
 
-### Testing tools
-| Use case | Tool |
-|---|---|
-| Unit tests | xUnit + FluentAssertions |
-| Mocking dependencies | Moq |
-| In-memory state for unit tests | Hand-written Fake classes |
-| HTTP integration tests | `WebApplicationFactory<Program>` |
-| In-memory database for integration | EF Core `UseInMemoryDatabase` |
+### Rules
+- Unit tests for aggregates, services, projections
+- Integration for endpoints via `WebApplicationFactory`
+- Fakes for state, Moq for interaction
+- **Don't test** getters, DTOs, framework code, trivial mappers
 
-### What NOT to test
-- Getters, setters, DTOs
-- Framework code
-- Trivial mappers
-
-### The critical fix for integration tests
-The `CustomWebApplicationFactory` must remove **ALL** EF Core registrations from the API before adding InMemory, otherwise EF throws "only a single database provider can be registered." See the file for the exact fix (removes `DbContextOptions<T>`, `DbContextOptions`, `T`, and `IDbContextOptionsConfiguration<T>`).
+### Known gotcha — `CustomWebApplicationFactory`
+Must remove **ALL** EF Core registrations before adding InMemory:
+`DbContextOptions<T>`, `DbContextOptions`, `T`, `IDbContextOptionsConfiguration<T>`. Otherwise: "only a single database provider can be registered."
 
 ---
 
 ## DATABASE
 
-### Connection string (`appsettings.json`)
-```json
-"ConnectionStrings": {
-  "Default": "Server=.\\SQLEXPRESS;Database=WalletAppDb;Trusted_Connection=True;TrustServerCertificate=True;"
-}
-```
-
-### JWT config (`appsettings.json`)
-```json
-"Jwt": {
-  "Secret": "this-is-a-dev-secret-key-change-me-in-production-at-least-32-chars-long",
-  "Issuer": "WalletApp",
-  "Audience": "WalletAppUsers"
-}
-```
-
-### SSMS connection
-- Server: `.\SQLEXPRESS`
-- Auth: Windows Authentication
+### Connection
+`Server=.\SQLEXPRESS;Database=WalletAppDb;Trusted_Connection=True;TrustServerCertificate=True;`
 
 ### Tables
-- **`Events`** — append-only. Columns: `Id (bigint identity PK)`, `AggregateId (guid)`, `EventType (string, 100)`, `Data (nvarchar max, JSON)`, `Version (int)`, `OccurredAt (datetime2)`. Unique index on `(AggregateId, Version)` planned for Step 10.
-- **`WalletReadModel`** — `WalletId (guid PK)`, `Balance (decimal(18,2))`
-- **`Users`** — `Id (guid PK)`, `Email (varchar 256, unique)`, `PasswordHash`, `CreatedAt`
-- **`__EFMigrationsHistory`** — EF Core migration tracking
+- **`Events`** — `Id`, `AggregateId`, `EventType`, `Data`, `Version`, `OccurredAt`. Unique index on `(AggregateId, Version)`.
+- **`WalletReadModel`** — `WalletId`, `Balance`
+- **`Users`** — `Id`, `Email` (unique), `PasswordHash`, `CreatedAt`, `Role`, `IsVerified`, `IsFrozen`
+- **`__EFMigrationsHistory`**
 
-### Applied migrations
-1. `InitialCreate` — creates `Events`, `WalletReadModel`
-2. `AddUsersTable` — creates `Users`
+### Migrations applied
+1. `InitialCreate`
+2. `AddUsersTable`
+3. `AddEventVersion` (with `ROW_NUMBER()` backfill — hand-edited)
+4. `AddUserPolicyFields` (Role default `"User"` — hand-edited)
 
 ---
 
 ## API ENDPOINTS
 
 ### Public
-- `POST /auth/register` — body `{ "email": "...", "password": "..." }` → returns `{ "id": "...", "email": "..." }`
-- `POST /auth/login` — body `{ "email": "...", "password": "..." }` → returns `{ "token": "..." }`
+- `POST /auth/register` — `{ email, password }` → `{ id, email }`
+- `POST /auth/login` — `{ email, password }` → `{ token }` (401 on bad creds)
 
-### Protected (`Authorization: Bearer <token>`)
-- `POST /wallet/deposit?amount=100` → returns `{ "balance": 100 }`
-- `POST /wallet/withdraw?amount=50` → returns `{ "balance": 50 }`
-- `GET /wallet/balance` → returns `{ "balance": 50 }`
+### Authenticated
+- `GET /auth/me` → `{ id, email, role, isVerified, isFrozen }`
+- `GET /wallet/balance` → `{ balance }`
+- `POST /wallet/deposit?amount=100` — requires **AccountNotFrozen**
+- `POST /wallet/withdraw?amount=50` — requires **CanTrade** (verified + not frozen)
+- `GET /wallet/transactions` → `[{ type, amount, occurredAt }]` (newest first)
+
+### Admin
+- `POST /admin/users/{id}/verify` — requires **IsAdmin**
+- `POST /admin/users/{id}/freeze` — requires **IsAdmin**
+- `GET /admin/users` → `[{ id, email, role, isVerified, isFrozen, createdAt }]` — requires **IsAdmin**
+
+---
+
+## WITHDRAWAL — design decision (deferred to Phase 3)
+
+### Current state (Phase 1)
+
+`POST /wallet/withdraw` is a **closed-loop ledger decrement.** The balance goes down, the event is stored, no money leaves the system. This is correct for learning the pattern. It is **not** a real withdrawal.
+
+### The three models
+
+**Model A — Internal ledger (current).**
+Money leaves the user's balance to nowhere. Useful for: game currency, in-app rewards, internal settlement. Not useful for real money because there's no counterparty.
+
+**Model B — Fiat off-ramp (recommended for Phase 3).**
+User withdraws to their bank account via a payment processor.
+- Requires: stored payment methods, KYC gate (you have `IsVerified`), asynchronous settlement, a payment processor (Stripe Payouts, Plaid ACH, Dwolla, Wise).
+- New entities: `PaymentMethod`, `Withdrawal`.
+- New events: `WithdrawalInitiated`, `WithdrawalCompleted`, `WithdrawalFailed`.
+- New endpoint shape: `POST /wallet/withdrawals` returns **202 Accepted** with a withdrawal ID. Settlement is a background job that polls the processor and emits `Completed` or `Failed`.
+- Frontend becomes: "my withdrawals" list with statuses, not a synchronous form.
+
+**Model C — Crypto withdrawal.**
+User pastes a destination wallet address, server broadcasts from a hot wallet, waits for confirmations. Requires blockchain node infrastructure, hot/cold wallet management, gas fee handling. Significantly more complex than Model B.
+
+### Decision
+
+**Stay on Model A for Phase 1 and Phase 2.** The withdraw endpoint is a training exercise for policy-gated money movement with concurrency safety. That's the pattern. Real settlement infrastructure is orthogonal.
+
+**Adopt Model B when starting Phase 3.** Why B over C:
+- Fiat is more universally understood by interviewers.
+- No blockchain infrastructure to run.
+- The asynchrony (202 + polling) is itself a valuable pattern to learn — it's how most real financial APIs work.
+- Crypto can be layered on later as a third payment method type.
+
+### What to say in interviews
+
+> "Withdrawal to nowhere is fine for a training ledger. Real money movement means a payment processor, KYC gating, stored payment methods, and an asynchronous settlement flow. That's Phase 3. The pattern is the same — policy-gated money movement with an event-sourced audit trail — but settlement becomes a background job that polls the provider, not a synchronous response."
+
+---
+
+## FRONTEND DETAILS
+
+### Design system — "Slate & Ledger"
+
+Restrained, financial, dark-mode-ready. Neutral grays for chrome, one deep blue for actions, green/red only where money direction is involved.
+
+**Light mode:**
+| Token | Hex | Used for |
+|---|---|---|
+| `background.default` | `#F8FAFC` | Page background |
+| `background.paper` | `#FFFFFF` | Cards, modals, navbar |
+| `primary.main` | `#1E40AF` | Primary buttons, links |
+| `primary.dark` | `#1E3A8A` | Button hover |
+| `primary.light` | `#3B82F6` | Focus rings |
+| `secondary.main` | `#475569` | Secondary buttons |
+| `success.main` | `#059669` | Deposits, + amounts |
+| `error.main` | `#DC2626` | Withdrawals, − amounts, frozen |
+| `warning.main` | `#D97706` | Unverified status |
+| `info.main` | `#0284C7` | Neutral notifications |
+| `text.primary` | `#0F172A` | Headings, body |
+| `text.secondary` | `#64748B` | Labels, captions |
+| `divider` | `#E2E8F0` | Borders, table lines |
+
+**Dark mode:** defined in `theme.ts` under `colorSchemes.dark`. Toggle not wired up yet.
+
+**Typography:** Inter (400, 500, 600). Headings tight letter-spacing. Numbers use `fontVariantNumeric: "tabular-nums"`.
+
+**Shape:** `borderRadius: 10` (MUI default is 4). Flat buttons (`disableElevation: true`). Sentence case (`textTransform: "none"`). Card shadow `0 1px 3px rgba(0,0,0,0.06)`.
+
+**MUI v6+ rule:** all layout props go in `sx`, not as direct props. `alignItems`, `justifyContent`, `flexGrow`, `mt`, `p`, etc. — none of them are top-level props anymore. Only component-specific props (Stack's `direction`/`spacing`, Button's `variant`/`color`, etc.) stay as props.
+
+### Auth flow
+1. Login → store token in `localStorage` via `AuthContext`
+2. On app load, if token exists, `GET /auth/me` fetches user
+3. `client.ts` reads token from `localStorage` and injects `Authorization: Bearer <token>`
+4. **Error handling:**
+   - **401** → clear token, redirect to `/login`
+   - **403** → show toast (do NOT log out) — used for policy violations
+   - **5xx / network error** → keep session, show "server unreachable" screen with Retry + Log out
+   - **409** → show "another operation in progress" toast (F5)
+
+### Three-layer enforcement
+| Layer | Where | Enforces |
+|---|---|---|
+| Backend policy | `CanTrade` handler | Source of truth |
+| Route guard | `ProtectedRoute` / `AdminRoute` | Navigation |
+| UI affordance | Disabled withdraw button | User experience |
+
+All three must exist. If you only did backend, users see buttons that 403. If you only did frontend, `curl` bypasses everything.
+
+### RefreshContext pattern
+A shared version counter. Deposit form increments it after success; `BalanceCard` includes `version` in its `useApi` deps. When version changes, the fetch re-runs. ~20 lines, replaces TanStack Query's `invalidateQueries` for this small app.
+
+### Env
+`.env.development` at `frontend/`:
+```
+VITE_API_URL=http://localhost:5138
+```
+Read in code as `import.meta.env.VITE_API_URL`.
 
 ---
 
 ## COMMON COMMANDS
 
+### Backend
 ```powershell
-# Build
 dotnet build
-
-# Run API with hot reload
 dotnet watch run --project WalletApp.API
-
-# Run all tests
 dotnet test
-
-# Run only unit tests
 dotnet test --filter "FullyQualifiedName~Unit"
-
-# Run only integration tests
 dotnet test --filter "FullyQualifiedName~Integration"
 
-# Run with verbose output
-dotnet test --logger "console;verbosity=detailed"
-
-# Create a migration
 dotnet ef migrations add MigrationName --project WalletApp.Data --startup-project WalletApp.API
-
-# Apply migrations
 dotnet ef database update --project WalletApp.Data --startup-project WalletApp.API
-
-# List migrations
 dotnet ef migrations list --project WalletApp.Data --startup-project WalletApp.API
-
-# Remove last migration (only if not applied)
-dotnet ef migrations remove --project WalletApp.Data --startup-project WalletApp.API
 ```
 
-**Always include `--project` and `--startup-project`.**
-
----
-
-## MANUAL TESTING
-
-### Swagger
-1. Navigate to `http://localhost:5138/swagger`
-2. `POST /auth/login` → copy `token` value (no quotes, no "Bearer" prefix)
-3. Click **Authorize** (padlock icon) → paste token → **Authorize** → **Close**
-4. All protected endpoints work
-
-### PowerShell
+### Frontend
 ```powershell
-$r = Invoke-RestMethod -Method Post -Uri "http://localhost:5138/auth/login" `
-  -ContentType "application/json" `
-  -Body '{"email":"test@test.com","password":"password123"}'
-$token = $r.token
-
-Invoke-RestMethod -Method Post -Uri "http://localhost:5138/wallet/deposit?amount=100" `
-  -Headers @{ Authorization = "Bearer $token" }
-
-Invoke-RestMethod -Uri "http://localhost:5138/wallet/balance" `
-  -Headers @{ Authorization = "Bearer $token" }
+cd frontend
+npm run dev                    # dev server on :5173
+npm run build                  # production build
+npm install <package>
 ```
+
+### Both servers running at once
+- Terminal 1: `dotnet run --project WalletApp.API` (port 5138)
+- Terminal 2: `cd frontend && npm run dev` (port 5173)
 
 ---
 
 ## KEY CONCEPTS LEARNED
 
 ### Event Sourcing
-- Events are immutable facts (past tense: `FundsDeposited`)
-- Event store is append-only (no UPDATE, no DELETE)
-- Current state = replay of events
-- Deletion = appending an event saying "deleted"
-- Event log is source of truth; read models are derived and disposable
-- Event log has no foreign keys and no external references — it's isolated
+- Events are immutable facts. Append-only. Current state = replay.
+- Deletion = appending a "deleted" event.
+- Event log is source of truth; read models are derived and disposable.
 
 ### CQRS
-- Write side: commands → handlers → aggregates → events
-- Read side: events → projections → read models → queries
-- Queries never touch the event store
-- Commands rehydrate every time (loop over events)
-- Queries read from read models (no rehydration, O(1))
+- Write: commands → handlers → aggregates → events
+- Read: events → projections → read models → queries
+- Queries never touch the event store.
+
+### Optimistic Concurrency
+- `Version` = the number of events that have happened to an aggregate.
+- Unique index `(AggregateId, Version)` — DB enforces it, not code.
+- On conflict: DB rejects the second write → `ConcurrencyException` → 409.
+- Client is expected to reload and retry.
+- **Not just for negative balances.** A version conflict blocks any write based on stale data, even a legal one. The server can't tell the difference.
 
 ### Aggregates
-- Hold business rules
-- Produce events
-- State changes only through `Apply` (private)
-- Rehydrated from events on every command
-- `private set` on state
+- Hold business rules. Produce events.
+- State changes only through `Apply` (private).
+- Rehydrated on every command.
+- `private set` on state.
 
-### Write-side pattern (memorize this)
-```
-1. Load events from the event store
-2. Rehydrate the aggregate
-3. Call the business method
-4. Append uncommitted events to the store
-5. Run projections to update read models
-```
+### Policies (authorization)
+- Named rules registered in `Program.cs` via `AddPolicy`.
+- Custom handlers implement `IAuthorizationHandler<TRequirement>`.
+- Handlers fetch **fresh user state** from `IUserStore` — not the token. A freeze must take effect on the next request, not the next login.
+- `RoleClaimType = "role"` + `MapInboundClaims = false` makes JWT role claims work in .NET 8+.
+- Policies ≠ roles ≠ permissions. Policy = a named rule. Role = identity. Permission = capability. Yours are policy + role.
 
-### DI lifetimes
-- **Singleton:** stateless helpers (can only depend on Singleton)
-- **Scoped:** anything using `DbContext`
-- **Rule:** if it uses `DbContext`, it must be Scoped
+### React patterns
+- **`useApi<T>` hook** — `{ data, loading, error, refetch }`. Replaces `useState + useEffect` boilerplate for every fetch.
+- **Three-state render** — loading → spinner; error → alert; data → card. Write this every time.
+- **Context for global state** — token + user in `AuthContext`. Refresh counter in `RefreshContext`.
+- **`ProtectedRoute`** — checks `token` and `loading`. Redirects if no token. Shows error if unreachable. Renders `<Outlet />` on success.
+- **401 vs 403 vs network error** — three different behaviors. Do not conflate them.
 
-### Optimistic concurrency (Step 10, not yet)
-- Version column on events + unique index on `(AggregateId, Version)`
-- Prevents two commands from writing to same aggregate simultaneously
-- DB enforces it — no code can bypass
-
-### Snapshots (concept understood, not implemented)
-- Cache aggregate state at a version
-- Rehydrate: load snapshot + replay events after snapshot version
-- Only needed when aggregates have thousands of events
-
-### Testing
-- Unit for aggregates, services, projections
-- Integration for endpoints via `WebApplicationFactory`
-- Fakes for state, Mocks for interaction
-- Test each piece right after it works
+### MUI v6+ gotchas
+- All layout props go in `sx`. `alignItems`, `justifyContent`, `flexGrow`, `mt`, etc. are not top-level.
+- `CssBaseline` must be inside `<ThemeProvider>` and applied once.
+- Fonts via `@fontsource/<font>/<weight>.css` imports (one per weight).
 
 ---
 
 ## GOTCHAS LEARNED THE HARD WAY
 
-1. **JWT `sub` claim remapping:** ASP.NET Core renames `sub` to `ClaimTypes.NameIdentifier` by default. Fix in `Program.cs`:
-   ```csharp
-   System.IdentityModel.Tokens.Jwt.JwtSecurityTokenHandler.DefaultInboundClaimTypeMap.Clear();
-   ```
-   Plus `NameClaimType = "sub"` in `TokenValidationParameters`.
+1. **JWT claim mapping (.NET 8+):** `JwtSecurityTokenHandler.DefaultInboundClaimTypeMap.Clear()` is dead code. Use `options.MapInboundClaims = false;` on `JwtBearerOptions`. Symptom: JWT validates fine, `IsAuthenticated == true`, but `context.User.FindFirst("sub")` returns null and every policy returns 403.
 
-2. **Swagger Authorize:** With `SecuritySchemeType.Http` + `Scheme = "bearer"`, paste **ONLY the token** (no `Bearer ` prefix). The name in `AddSecurityDefinition` must exactly match the name in `AddSecurityRequirement`.
+2. **`RoleClaimType = "role"`** required for `RequireRole("Admin")` to work with a custom JWT. Without it, `RequireRole` reads `ClaimTypes.Role` (a long URI), finds nothing, and 403s everyone.
 
-3. **EF Core CLI:** Requires both `--project` and `--startup-project`.
+3. **`FrameworkReference Microsoft.AspNetCore.App`** on any class library that uses `IAuthorizationRequirement`. Without it, `CanTradeRequirement : IAuthorizationRequirement` fails to compile in Core.
 
-4. **`AddSingleton` vs `AddScoped`:** Stores using `AppDbContext` must be `AddScoped`. If a Singleton depends on a Scoped, DI fails at startup (including `dotnet ef` migrations).
+4. **EF migrations on populated tables:** hand-edit any migration that adds a non-nullable column with a unique index. Insert a `migrationBuilder.Sql("...")` backfill between `AddColumn` and `CreateIndex`. EF can't see your data.
 
-5. **SQL Server instance:** `.\SQLEXPRESS` (SQL Express, not LocalDB). In JSON: `.\\SQLEXPRESS`.
+5. **Casing on Windows:** `Pages` and `pages` are the same folder on Windows, different on Linux. Be consistent in imports. When you rename a folder case-only, Windows won't fire a file-watcher event; VS Code's TS server keeps the old path until you run `TypeScript: Restart TS Server`.
 
-6. **Users are NOT event-sourced.** Plain SQL table.
+6. **React Hook Form + MUI v6:** layout props go in `sx`, not as props.
 
-7. **Event type resolution for JSON:** `Type.GetType($"WalletApp.Core.Events.{record.EventType}, WalletApp.Core")`.
+7. **CORS:** `app.UseCors("Frontend")` must come before `UseAuthentication` and `UseAuthorization`. Symptom: browser console "blocked by CORS policy" but backend logs nothing.
 
-8. **`Microsoft.OpenApi` 2.x:** namespace is `Microsoft.OpenApi` (no `.Models`). `OpenApiSecurityScheme.Reference` is gone — use `OpenApiSecuritySchemeReference` and the delegate overload of `AddSecurityRequirement`.
+8. **`Insufficient funds` returns 500** (should be 400). Band-aided on auth endpoints only. Full fix is the ProblemDetails global handler (Phase 1.5).
 
-9. **Integration tests need `public partial class Program { }` at end of `Program.cs`** for the test project to reference the API assembly.
-
-10. **CRITICAL: `CustomWebApplicationFactory` must remove ALL EF Core registrations** before adding InMemory. Removing just `DbContextOptions<AppDbContext>` is not enough — EF Core 8+ registers multiple services (`DbContextOptions<T>`, `DbContextOptions`, `T`, `IDbContextOptionsConfiguration<T>`). Otherwise: "Services for database providers 'Microsoft.EntityFrameworkCore.SqlServer', 'Microsoft.EntityFrameworkCore.InMemory' have been registered."
-
-11. **In-memory DB per factory instance:** Use `Guid.NewGuid()` in the DB name so test classes don't share state.
+9. **`InMemoryEventStore.cs` and `InMemoryUserStore.cs`:** deleted. Dead code from earlier steps. If you ever need an in-memory store for tests, write it in `WalletApp.Tests`, not `WalletApp.Data`.
 
 ---
 
-## WHAT CARRIES OVER 100% TO MATCHENGINE
+## WHAT CARRIES TO MATCHENGINE
 
-**Keep as-is:**
+### Backend — copy as-is
 - `IEventStore` / `SqlEventStore`
-- `IWalletReadStore` / `SqlWalletReadStore` (pattern reused)
-- Projection pattern
-- Query handler pattern
+- `IWalletReadStore` pattern, projection pattern, query handler pattern
 - 3-project structure + test project
 - JWT auth + `Users` table + migrations
 - Swagger config
 - Testing setup (xUnit + WebApplicationFactory + Moq)
 - `public partial class Program { }` in API
-- `CustomWebApplicationFactory` (rename to `MatchEngine` namespace)
+- `CustomWebApplicationFactory`
+- Concurrency primitives (`Version`, unique index, `ConcurrencyException`)
+- Policy system + handlers + `CanTrade` + `MapInboundClaims = false`
 
-**Replace (domain only):**
-- `Wallet` aggregate → `OrderBook` + `Order` + `Wallet`
-- Events → add `OrderPlaced`, `OrderPartiallyFilled`, `OrderFullyFilled`, `OrderCancelled`, `TradeExecuted`
+### Backend — replace domain
+- `Wallet` → `OrderBook` + `Order` + `Wallet`
+- Add events: `OrderPlaced`, `OrderPartiallyFilled`, `OrderFullyFilled`, `OrderCancelled`, `TradeExecuted`
 - Add projections: `OrderBookProjection`, `TradeHistoryProjection`
 - Add queries: `GetOrderBookQuery`, `GetTradeHistoryQuery`, `GetPortfolioQuery`
 
-**Add (new to MatchEngine):**
+### Backend — new
 - Matching algorithm (price-time priority)
-- In-memory order book data structures (`SortedDictionary`, `Queue`)
+- `SortedDictionary<decimal, Queue<Order>>` for bids/asks
 - Multiple aggregates per command
 - SignalR real-time updates
-- React frontend
-- Unit tests for matching algorithm (critical)
 
-**Scalability to full trading platform:**
-- Multiple symbols: add `Symbol` field, per-symbol order book (dictionary)
-- Multiple order types: new events per type, same pattern
-- Charts: new projection that aggregates trades into OHLC buckets
-- Price alerts: background jobs (Hangfire)
-- KYC: `User.IsVerified` flag + verification workflow (already in Step 11)
-- Admin: policies already in place
+### Frontend — copy as-is
+- Vite + TS + MUI + React Router + React Hook Form
+- `theme.ts` (Slate & Ledger)
+- `client.ts`, `useApi`, `AuthContext`, `RefreshContext`
+- `ProtectedRoute`, `AdminRoute`, `Layout`
+- Login / Register / NotFound pages
+- Three-state render pattern
+
+### Frontend — new
+- Order book display (table, real-time via SignalR)
+- Order placement form (market / limit selector)
+- Portfolio view
+- Charts (add Recharts — justified)
+- SignalR replaces `RefreshContext` for live data
 
 ---
 
-## ENTERPRISE ROADMAP (post Phase 3)
+## HARDENING PHASES (between main phases)
 
-### Tier 1 — matters for interviews (5-7 days)
-1. Serilog structured logging + correlation IDs
-2. Health checks: `/health` (liveness), `/health/ready` (readiness)
-3. API versioning (`Asp.Versioning.Mvc`)
-4. Rate limiting (.NET middleware)
-5. Idempotency keys on write endpoints
-6. CI/CD (GitHub Actions: build + test + Docker)
-7. ProblemDetails for business errors (400, not 500)
+The enterprise items are not all deferred to the end. They're distributed
+between phases, at the point where the current phase has proven the concept
+and the next phase needs a stronger foundation.
 
-### Tier 2 — separates good from great (5-7 days)
-8. Docker + Docker Compose (API + SQL Server + Redis)
-9. Redis caching for order books
-10. Hangfire background jobs
-11. Audit log query endpoint (free from event sourcing)
+### Phase 1.5 — Wallet hardening (after F8, before MatchEngine)
 
-### Tier 3 — know, don't build
-Multi-tenancy, Kafka/RabbitMQ, microservices, Saga pattern, sharding, read replicas, Polly circuit breakers, blue-green deploy, feature flags
+Reason for placement: MatchEngine copies WalletApp's infrastructure. Every
+hardening item done here gets copied for free. Skipping it means copying a
+weaker base.
+
+- [ ] **ProblemDetails global exception handler.** Replaces per-endpoint
+      try/catch. Business exceptions (`ValidationException`,
+      `NotFoundException`, `AuthenticationException`) map to 400/404/401
+      centrally. Wallet endpoints currently return 500 on `Insufficient
+      funds` (should be 400).
+- [ ] **Idempotency keys on write endpoints.** Client sends
+      `Idempotency-Key` header; server dedupes on it.
+- [ ] **Pagination on list endpoints.** `/wallet/transactions` and
+      `/admin/users`. Cursor-based: `?afterId=...&limit=50`.
+- [ ] **Rate limiting.** `AddRateLimiter` built-in. Per-user + per-IP.
+- [ ] **Serilog structured logging + correlation IDs.**
+- [ ] **Health checks.** `/health` (liveness), `/health/ready` (readiness).
+- [ ] **API versioning.** `/api/v1/...` via `Asp.Versioning.Mvc`.
+- [ ] **Refresh tokens.** Users currently re-login every hour.
+- [ ] **Password reset.** Email-token flow.
+- [ ] **GitHub Actions CI.** Build + test on push.
+
+A 3-5 day chunk that turns WalletApp from "portfolio project" into "portfolio
+project a senior engineer would nod at."
+
+### Phase 2 — MatchEngine (during the build)
+
+Reuses everything from WalletApp. New additions specific to MatchEngine:
+
+- [ ] **SignalR** for real-time order book updates (inherent to MatchEngine)
+- [ ] **Recharts** on the frontend for price history
+- [ ] **Load testing the matching engine.** Concurrent order stress test.
+- [ ] **Performance profiling.** Matching algorithm under high throughput.
+
+### Phase 2.5 — MatchEngine hardening (after MatchEngine works, before Phase 3)
+
+- [ ] **Docker + Docker Compose.** API + SQL Server + Redis on one command.
+- [ ] **Redis caching for order books.** Hot read models.
+- [ ] **Hangfire background jobs.** Settlement polling, price alerts.
+- [ ] **Audit log query endpoint.** Free from event sourcing — the data is
+      already there, just expose it.
+- [ ] **CI/CD to a real environment.** Deploy pipeline, not just tests.
+
+### Phase 3 — Full Trading Platform
+
+Trading-specific features. Withdrawal design is deferred to this phase (see
+WITHDRAWAL section).
+
+- [ ] **Withdrawal Model B (fiat off-ramp).** See separate section.
+- [ ] KYC workflow (multi-tier `VerificationLevel` instead of boolean)
+- [ ] Multiple order types (stop-loss, IOC, FOK)
+- [ ] Multiple symbols (BTC, ETH, AAPL)
+- [ ] Candlestick charts (OHLC aggregation projection)
+- [ ] Price alerts (Hangfire)
+- [ ] Admin dashboard (freeze users, view all activity, audit log query)
+- [ ] Free market data integration (Finnhub, Alpaca paper trading)
+- [ ] Email/SMS notifications on order fills
+
+### Deferred — Know, don't build
+
+Mention these in interviews, don't implement them:
+
+- Multi-tenancy
+- Kafka / RabbitMQ event streaming
+- Microservices split
+- Saga pattern
+- Database sharding
+- Read replicas
+- Polly circuit breakers
+- Blue-green deploys
+- Feature flags (LaunchDarkly-style)
+- HTTPS termination (nginx / Caddy) — needed for real deploy, but cloud
+  providers handle it for you
+
+### Framing for interviews
+
+> "The architecture is production-grade — event sourcing with optimistic
+> concurrency, CQRS, policy-based auth with fresh-state handlers. The
+> operational concerns — idempotency keys, structured logging, health checks,
+> CI/CD — were added in Phase 1.5, after the wallet was working, precisely so
+> MatchEngine could inherit them. I deliberately separated domain architecture
+> from ops because getting event sourcing right is where projects fail,
+> whereas the ops layer is a fixed, well-understood checklist."
 
 ---
 
 ## ENVIRONMENT
 
 - .NET SDK: **.NET 10**
-- VS Code extensions: C# Dev Kit, C# (Microsoft), mssql, REST Client
-- Note: C# Dev Kit had an activation error at one point. Using CLI only — no IDE features. Everything builds and runs.
-- SQL Server Express (`MSSQL$SQLEXPRESS`, running)
+- Node.js: **24 LTS**, npm **11.x**
+- VS Code extensions: C# Dev Kit, C# (Microsoft), mssql, REST Client, ESLint
+- SQL Server Express (`MSSQL$SQLEXPRESS`)
 - SSMS connects to `.\SQLEXPRESS` with Windows Auth
-- API runs on `http://localhost:5138` (may change — check terminal)
+- API: `http://localhost:5138` (check terminal — may change)
+- Frontend: `http://localhost:5173`
+
+---
+
+## CURRENT STATE
+
+- **61 backend tests passing**
+- **Backend:** complete through Step 11 + 3 extension endpoints for the frontend
+- **Frontend:** F0–F4 done — auth works end-to-end, balance displays, deposits update without refresh, error handling distinguishes 401 / 403 / network failure
+- **Not yet built:** withdraw form, transaction list, admin page
 
 ---
 
 ## NEXT ACTION
 
-**Step 10 — Optimistic Concurrency.** See "Steps remaining" for the full checklist.
+**F5 — WithdrawForm.**
 
-After Step 10 → Step 11 (Policies) → Step 12 (Rename to MatchEngine) → Step 13 (OrderBook + matching algorithm).
+Key things this step covers:
+- Disable button when `!user.isVerified` or `user.isFrozen`
+- Show a helpful reason (banner or tooltip)
+- Handle 403 (policy rejection — should be prevented by UI, but defensive)
+- Handle 409 (concurrency conflict — user double-clicked)
+- Handle 400 (insufficient funds — currently returns 500 until Phase 1.5)
+- Refresh balance after success
+
+After F5 → F6 (TransactionList) → F7 (AdminPage) → F8 (polish). Then Phase 1.5.
 
 ---
 
@@ -556,11 +712,13 @@ After Step 10 → Step 11 (Policies) → Step 12 (Rename to MatchEngine) → Ste
 
 Paste this entire file and say:
 
-> "Continue from where this PROGRESS.md leaves off. The current state: 42 tests passing. Next step is Step 10 — Optimistic Concurrency. Give me the exact files to create/modify, plus migration command, plus integration test for the concurrent write scenario."
+> "Continue from where this PROGRESS.md leaves off. Current state: 61 backend tests passing. Frontend F0–F4 done — auth flow works, balance displays, deposits update live via RefreshContext. Next step is F5 — WithdrawForm, with disabled-when-unverified logic and 403/409 handling. Give me exact files to create/modify, plus what to test after."
 
 Be specific about wanting:
 - Exact file paths
-- Exact code (full files, not snippets)
+- Full file contents (not snippets), or precise diffs against pasted files
 - Exact commands
 - How to test after
-- What NOT to touch (the existing 42 tests should keep passing)
+- What NOT to touch (the 61 tests should keep passing)
+
+If a file shape is unknown, the assistant should ask you to paste it rather than assume.

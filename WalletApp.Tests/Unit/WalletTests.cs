@@ -1,6 +1,7 @@
 using FluentAssertions;
 using WalletApp.Core.Aggregates;
 using WalletApp.Core.Events;
+using WalletApp.Core.Exceptions;
 
 namespace WalletApp.Tests.Unit;
 
@@ -43,7 +44,7 @@ public class WalletTests
 
         var act = () => wallet.Deposit(0);
 
-        act.Should().Throw<Exception>()
+        act.Should().Throw<ValidationException>()
             .WithMessage("*positive*");
     }
 
@@ -54,7 +55,7 @@ public class WalletTests
 
         var act = () => wallet.Deposit(-50);
 
-        act.Should().Throw<Exception>()
+        act.Should().Throw<ValidationException>()
             .WithMessage("*positive*");
     }
 
@@ -117,7 +118,7 @@ public class WalletTests
 
         var act = () => wallet.Withdraw(100);
 
-        act.Should().Throw<Exception>()
+        act.Should().Throw<InsufficientFundsException>()
             .WithMessage("*Insufficient*");
     }
 
@@ -129,7 +130,7 @@ public class WalletTests
 
         var act = () => wallet.Withdraw(0);
 
-        act.Should().Throw<Exception>()
+        act.Should().Throw<ValidationException>()
             .WithMessage("*positive*");
     }
 
@@ -141,7 +142,7 @@ public class WalletTests
 
         var act = () => wallet.Withdraw(-10);
 
-        act.Should().Throw<Exception>()
+        act.Should().Throw<ValidationException>()
             .WithMessage("*positive*");
     }
 
@@ -153,7 +154,7 @@ public class WalletTests
         wallet.ClearUncommittedEvents();
 
         var act = () => wallet.Withdraw(100);
-        act.Should().Throw<Exception>();
+        act.Should().Throw<InsufficientFundsException>();
 
         wallet.UncommittedEvents.Should().BeEmpty();
     }

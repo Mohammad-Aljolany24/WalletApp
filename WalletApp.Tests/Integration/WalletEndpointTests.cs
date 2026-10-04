@@ -116,7 +116,7 @@ public class WalletEndpointTests : IClassFixture<CustomWebApplicationFactory<Pro
 
         var response = await client.PostAsync("/wallet/withdraw?amount=100", null);
 
-        response.StatusCode.Should().Be(HttpStatusCode.InternalServerError);
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
     // ============================================

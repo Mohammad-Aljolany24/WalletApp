@@ -17,8 +17,18 @@ using Microsoft.AspNetCore.Authorization;                                    // 
 using WalletApp.API.Authorization;                                            // <-- add
 using WalletApp.Core.Auth.Requirements;    
 using WalletApp.Core.Events;
+using WalletApp.API.Exceptions;
+using WalletApp.Core.Exceptions;
 
 var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("Frontend", policy =>
+        policy.WithOrigins("http://localhost:5173")
+              .AllowAnyHeader()
+              .AllowAnyMethod());
+});
 
 
 // Swagger
@@ -108,6 +118,9 @@ builder.Services.AddAuthorization(options =>
         p.AddRequirements(new AccountNotFrozenRequirement()));
 });
 
+builder.Services.AddProblemDetails();
+builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
+
 
 
 // ============================================
@@ -137,12 +150,18 @@ builder.Services.AddScoped<GetBalanceQueryHandler>();
 
 var app = builder.Build();
 
+
+
 // Swagger UI (dev only)
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI();
 }
+
+
+app.UseExceptionHandler();
+app.UseCors("Frontend");
 
 app.UseAuthentication();
 app.UseAuthorization();
@@ -153,16 +172,31 @@ app.UseAuthorization();
 
 app.MapPost("/auth/register", async (RegisterRequest req, IAuthService auth) =>
 {
-    var user = await auth.RegisterAsync(req.Email, req.Password);
-    return Results.Ok(new { user.Id, user.Email });
+    try
+    {
+        var user = await auth.RegisterAsync(req.Email, req.Password);
+        return Results.Ok(new { user.Id, user.Email });
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
 });
 
 app.MapPost("/auth/login", async (LoginRequest req, IAuthService auth) =>
 {
-    var token = await auth.LoginAsync(req.Email, req.Password);
-    return Results.Ok(new { token });
+    try
+    {
+        var token = await auth.LoginAsync(req.Email, req.Password);
+        return Results.Ok(new { token });
+    }
+    catch
+    {
+        return Results.Json(
+            new { error = "Invalid email or password." },
+            statusCode: StatusCodes.Status401Unauthorized);
+    }
 });
-
 
 app.MapGet("/auth/me", async (
     HttpContext ctx,
@@ -191,7 +225,11 @@ static Guid GetUserId(HttpContext ctx)
 {
     var sub = ctx.User.FindFirst("sub")?.Value
         ?? ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
-    return Guid.Parse(sub!);
+
+    if (!Guid.TryParse(sub, out var userId))
+        throw new UnauthorizedException("Missing or invalid user identity.");
+
+    return userId;
 }
 
 app.MapPost("/wallet/deposit", async (
@@ -208,14 +246,7 @@ app.MapPost("/wallet/deposit", async (
 
     wallet.Deposit(amount);
 
-    try
-    {
-        await eventStore.AppendAsync(userId, wallet.UncommittedEvents, expectedVersion);
-    }
-    catch (ConcurrencyException ex)
-    {
-        return Results.Conflict(new { error = ex.Message });
-    }
+       await eventStore.AppendAsync(userId, wallet.UncommittedEvents, expectedVersion);
 
     foreach (var evt in wallet.UncommittedEvents)
         await projection.HandleAsync(evt);
@@ -239,14 +270,7 @@ app.MapPost("/wallet/withdraw", async (
 
     wallet.Withdraw(amount);
 
-    try
-    {
-        await eventStore.AppendAsync(userId, wallet.UncommittedEvents, expectedVersion);
-    }
-    catch (ConcurrencyException ex)
-    {
-        return Results.Conflict(new { error = ex.Message });
-    }
+       await eventStore.AppendAsync(userId, wallet.UncommittedEvents, expectedVersion);
 
     foreach (var evt in wallet.UncommittedEvents)
         await projection.HandleAsync(evt);
