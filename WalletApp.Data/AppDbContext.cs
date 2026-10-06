@@ -12,6 +12,8 @@ public class AppDbContext : DbContext
 
      public DbSet<UserRecord> Users => Set<UserRecord>(); 
 
+     public DbSet<IdempotencyRecord> IdempotencyRecords => Set<IdempotencyRecord>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<EventRecord>(e =>
@@ -39,5 +41,15 @@ public class AppDbContext : DbContext
             e.Property(x => x.PasswordHash).IsRequired();
             e.Property(x => x.Role).HasMaxLength(50).IsRequired(); 
         });
+
+        modelBuilder.Entity<IdempotencyRecord>(e =>
+{
+    e.ToTable("IdempotencyRecords");
+    e.HasKey(x => new { x.UserId, x.Key });
+    e.Property(x => x.Key).HasMaxLength(200).IsRequired();
+    e.Property(x => x.Endpoint).HasMaxLength(256).IsRequired();
+    e.Property(x => x.ResponseBody).IsRequired();
+    e.HasIndex(x => x.ExpiresAt); // for the future TTL cleanup job
+    });
     }
 }

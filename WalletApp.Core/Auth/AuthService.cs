@@ -1,3 +1,5 @@
+using WalletApp.Core.Exceptions;
+
 namespace WalletApp.Core.Auth;
 
 public class AuthService : IAuthService
@@ -19,13 +21,14 @@ public class AuthService : IAuthService
     public async Task<User> RegisterAsync(string email, string password)
     {
         if (string.IsNullOrWhiteSpace(email))
-            throw new Exception("Email is required");
+            throw new ValidationException("Email is required.");
+
         if (string.IsNullOrWhiteSpace(password) || password.Length < 6)
-            throw new Exception("Password must be at least 6 characters");
+            throw new ValidationException("Password must be at least 6 characters.");
 
         var existing = await _userStore.GetByEmailAsync(email);
         if (existing != null)
-            throw new Exception("Email already registered");
+            throw new ValidationException("Email already registered.");
 
         var user = new User
         {
@@ -43,10 +46,10 @@ public class AuthService : IAuthService
     {
         var user = await _userStore.GetByEmailAsync(email);
         if (user == null)
-            throw new Exception("Invalid credentials");
+            throw new UnauthorizedException("Invalid email or password.");
 
         if (!_passwordHasher.Verify(password, user.PasswordHash))
-            throw new Exception("Invalid credentials");
+            throw new UnauthorizedException("Invalid email or password.");
 
         return _tokenService.GenerateToken(user);
     }

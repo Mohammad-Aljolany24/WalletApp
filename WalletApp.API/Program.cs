@@ -13,14 +13,25 @@ using WalletApp.Data;
 using WalletApp.Data.Auth;
 using WalletApp.Data.EventStore;
 using WalletApp.Data.ReadModels;
-using Microsoft.AspNetCore.Authorization;                                    // <-- add
-using WalletApp.API.Authorization;                                            // <-- add
+using Microsoft.AspNetCore.Authorization;                                   
+using WalletApp.API.Authorization;                                           
 using WalletApp.Core.Auth.Requirements;    
 using WalletApp.Core.Events;
 using WalletApp.API.Exceptions;
 using WalletApp.Core.Exceptions;
+using WalletApp.API.Idempotency;
+using WalletApp.Core.Pagination;
+using Serilog;
+using WalletApp.API.Middleware;
 
 var builder = WebApplication.CreateBuilder(args);
+
+Log.Logger = new LoggerConfiguration()
+    .ReadFrom.Configuration(builder.Configuration)
+    .Enrich.FromLogContext()
+    .CreateLogger();
+
+builder.Host.UseSerilog();
 
 builder.Services.AddCors(options =>
 {
@@ -85,19 +96,25 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         };
 
         // ← NEW: log authentication results
-        options.Events = new JwtBearerEvents
-        {
-            OnAuthenticationFailed = ctx =>
-            {
-                Console.WriteLine("❌ JWT FAILED: " + ctx.Exception.GetType().Name + " — " + ctx.Exception.Message);
-                return Task.CompletedTask;
-            },
-            OnTokenValidated = ctx =>
-            {
-                Console.WriteLine("✅ JWT OK for: " + ctx.Principal?.Identity?.Name);
-                return Task.CompletedTask;
-            }
-        };
+      options.Events = new JwtBearerEvents
+{
+    OnAuthenticationFailed = ctx =>
+    {
+        var logger = ctx.HttpContext.RequestServices
+            .GetRequiredService<ILoggerFactory>()
+            .CreateLogger("JwtBearer");
+        logger.LogWarning(ctx.Exception, "JWT authentication failed");
+        return Task.CompletedTask;
+    },
+    OnTokenValidated = ctx =>
+    {
+        var logger = ctx.HttpContext.RequestServices
+            .GetRequiredService<ILoggerFactory>()
+            .CreateLogger("JwtBearer");
+        logger.LogInformation("JWT validated for {Subject}", ctx.Principal?.Identity?.Name);
+        return Task.CompletedTask;
+    }
+};
     });
     // Disable claim mapping globally
     System.IdentityModel.Tokens.Jwt.JwtSecurityTokenHandler.DefaultInboundClaimTypeMap.Clear();
@@ -160,7 +177,9 @@ if (app.Environment.IsDevelopment())
 }
 
 
+app.UseCorrelationId();
 app.UseExceptionHandler();
+app.UseSerilogRequestLogging();
 app.UseCors("Frontend");
 
 app.UseAuthentication();
@@ -172,30 +191,14 @@ app.UseAuthorization();
 
 app.MapPost("/auth/register", async (RegisterRequest req, IAuthService auth) =>
 {
-    try
-    {
-        var user = await auth.RegisterAsync(req.Email, req.Password);
-        return Results.Ok(new { user.Id, user.Email });
-    }
-    catch (Exception ex)
-    {
-        return Results.BadRequest(new { error = ex.Message });
-    }
+    var user = await auth.RegisterAsync(req.Email, req.Password);
+    return Results.Ok(new { user.Id, user.Email });
 });
 
 app.MapPost("/auth/login", async (LoginRequest req, IAuthService auth) =>
 {
-    try
-    {
-        var token = await auth.LoginAsync(req.Email, req.Password);
-        return Results.Ok(new { token });
-    }
-    catch
-    {
-        return Results.Json(
-            new { error = "Invalid email or password." },
-            statusCode: StatusCodes.Status401Unauthorized);
-    }
+    var token = await auth.LoginAsync(req.Email, req.Password);
+    return Results.Ok(new { token });
 });
 
 app.MapGet("/auth/me", async (
@@ -254,7 +257,8 @@ app.MapPost("/wallet/deposit", async (
     wallet.ClearUncommittedEvents();
 
     return Results.Ok(new { balance = wallet.Balance });
-}).RequireAuthorization("AccountNotFrozen");
+}).AddEndpointFilter<IdempotencyFilter>()
+.RequireAuthorization("AccountNotFrozen");
 
 app.MapPost("/wallet/withdraw", async (
     decimal amount,
@@ -278,7 +282,9 @@ app.MapPost("/wallet/withdraw", async (
     wallet.ClearUncommittedEvents();
 
     return Results.Ok(new { balance = wallet.Balance });
-}).RequireAuthorization("CanTrade");
+})
+.AddEndpointFilter<IdempotencyFilter>()
+.RequireAuthorization("CanTrade");
 
 app.MapGet("/wallet/balance", async (
     HttpContext ctx,
@@ -293,13 +299,25 @@ app.MapGet("/wallet/balance", async (
 
 app.MapGet("/wallet/transactions", async (
     HttpContext ctx,
-    IEventStore eventStore) =>
+    IEventStore eventStore,
+    string? cursor,
+    int? limit) =>
 {
     var userId = GetUserId(ctx);
-    var events = await eventStore.GetEventsAsync(userId);
+    var take = Math.Clamp(limit ?? 20, 1, 100);
 
-    var transactions = events
-        .Select(e => e switch
+    long? afterId = null;
+    if (cursor is not null)
+    {
+        afterId = Cursor.DecodeEventCursor(cursor);
+        if (afterId is null)
+            return Results.Ok(new { items = Array.Empty<object>(), nextCursor = (string?)null });
+    }
+
+    var paged = await eventStore.GetEventsPagedAsync(userId, afterId, take);
+
+    var items = paged.Items
+        .Select(s => s.Event switch
         {
             FundsDeposited d => new
             {
@@ -316,10 +334,9 @@ app.MapGet("/wallet/transactions", async (
             _ => null
         })
         .Where(t => t is not null)
-        .Reverse()  // newest first
         .ToList();
 
-    return Results.Ok(transactions);
+    return Results.Ok(new { items, nextCursor = paged.NextCursor });
 }).RequireAuthorization();
 
 
@@ -357,11 +374,29 @@ app.MapPost("/admin/users/{id:guid}/freeze", async (
     return Results.Ok(new { user.Id, user.IsFrozen });
 }).RequireAuthorization("IsAdmin");
 
-app.MapGet("/admin/users", async (IUserStore userStore) =>
+app.MapGet("/admin/users", async (
+    IUserStore userStore,
+    string? cursor,
+    int? limit) =>
 {
-    var users = await userStore.GetAllAsync();
+    var take = Math.Clamp(limit ?? 20, 1, 100);
 
-    return Results.Ok(users.Select(u => new
+    DateTime? afterCreatedAt = null;
+    Guid? afterId = null;
+
+    if (cursor is not null)
+    {
+        var decoded = Cursor.DecodeUserCursor(cursor);
+        if (decoded is null)
+            return Results.Ok(new { items = Array.Empty<object>(), nextCursor = (string?)null });
+
+        afterCreatedAt = decoded.Value.CreatedAt;
+        afterId = decoded.Value.Id;
+    }
+
+    var paged = await userStore.GetPagedAsync(afterCreatedAt, afterId, take);
+
+    var items = paged.Items.Select(u => new
     {
         u.Id,
         u.Email,
@@ -369,14 +404,28 @@ app.MapGet("/admin/users", async (IUserStore userStore) =>
         u.IsVerified,
         u.IsFrozen,
         u.CreatedAt
-    }));
+    }).ToList();
+
+    return Results.Ok(new { items, nextCursor = paged.NextCursor });
 }).RequireAuthorization("IsAdmin");
 
 
 
 
 
-app.Run();
+try
+{
+    Log.Information("Starting WalletApp API");
+    app.Run();
+}
+catch (Exception ex)
+{
+    Log.Fatal(ex, "WalletApp API terminated unexpectedly");
+}
+finally
+{
+    Log.CloseAndFlush();
+}
 
 // ============================================
 // Request DTOs

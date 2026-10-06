@@ -1,8 +1,11 @@
+import { useCallback, useEffect, useState } from "react";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
+import Button from "@mui/material/Button";
 import Card from "@mui/material/Card";
 import CardContent from "@mui/material/CardContent";
 import CircularProgress from "@mui/material/CircularProgress";
+import Stack from "@mui/material/Stack";
 import Table from "@mui/material/Table";
 import TableBody from "@mui/material/TableBody";
 import TableCell from "@mui/material/TableCell";
@@ -11,7 +14,6 @@ import TableRow from "@mui/material/TableRow";
 import Typography from "@mui/material/Typography";
 import { walletApi, type Transaction } from "../api/wallet";
 import { useRefresh } from "../context/RefreshContext";
-import { useApi } from "../hooks/useApi";
 
 function formatAmount(tx: Transaction): string {
   const sign = tx.type === "Deposited" ? "+" : "-";
@@ -24,10 +26,54 @@ function amountColor(tx: Transaction): "success.main" | "error.main" {
 
 export default function TransactionList() {
   const { version } = useRefresh();
-  const { data, loading, error } = useApi(
-    () => walletApi.getTransactions(),
-    [version]
-  );
+
+  const [items, setItems] = useState<Transaction[]>([]);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Reload page 1 whenever version changes (deposit / withdraw / etc).
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+
+    walletApi
+      .getTransactions(null)
+      .then((res) => {
+        if (cancelled) return;
+        setItems(res.items);
+        setNextCursor(res.nextCursor);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : "Something went wrong.");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [version]);
+
+  const loadMore = useCallback(async () => {
+    if (!nextCursor || loadingMore) return;
+    setLoadingMore(true);
+    setError(null);
+
+    try {
+      const res = await walletApi.getTransactions(nextCursor);
+      setItems((prev) => [...prev, ...res.items]);
+      setNextCursor(res.nextCursor);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong.");
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [nextCursor, loadingMore]);
 
   return (
     <Card>
@@ -44,7 +90,7 @@ export default function TransactionList() {
 
         {!loading && error && <Alert severity="error">{error}</Alert>}
 
-        {!loading && !error && data && data.length === 0 && (
+        {!loading && !error && items.length === 0 && (
           <Typography
             variant="body2"
             color="text.secondary"
@@ -54,7 +100,7 @@ export default function TransactionList() {
           </Typography>
         )}
 
-        {!loading && !error && data && data.length > 0 && (
+        {!loading && !error && items.length > 0 && (
           <Table size="small">
             <TableHead>
               <TableRow>
@@ -64,7 +110,7 @@ export default function TransactionList() {
               </TableRow>
             </TableHead>
             <TableBody>
-              {data.map((tx, i) => (
+              {items.map((tx, i) => (
                 <TableRow key={`${tx.occurredAt}-${tx.type}-${i}`}>
                   <TableCell>
                     <Typography variant="body2" color="text.secondary">
@@ -90,6 +136,19 @@ export default function TransactionList() {
               ))}
             </TableBody>
           </Table>
+        )}
+
+        {!loading && !error && nextCursor && (
+          <Stack sx={{ alignItems: "center", mt: 2 }}>
+            <Button
+              variant="text"
+              size="small"
+              disabled={loadingMore}
+              onClick={loadMore}
+            >
+              {loadingMore ? "Loading..." : "Load more"}
+            </Button>
+          </Stack>
         )}
       </CardContent>
     </Card>

@@ -22,6 +22,7 @@ export default function WithdrawForm() {
   const { refresh } = useRefresh();
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
 
   const {
     register,
@@ -49,12 +50,13 @@ export default function WithdrawForm() {
     setSuccess(null);
 
     try {
-      const result = await walletApi.withdraw(data.amount);
+      const result = await walletApi.withdraw(data.amount, idempotencyKey);
       setSuccess(
         `Withdrew $${data.amount.toFixed(2)}. New balance: $${result.balance.toFixed(2)}.`
       );
       reset({ amount: 50 });
       refresh(); // tells BalanceCard and other hooks to refetch
+      setIdempotencyKey(crypto.randomUUID());
     } catch (err) {
       if (err instanceof ApiError) {
         if (err.status === 400) {

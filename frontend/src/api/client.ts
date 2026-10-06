@@ -13,7 +13,8 @@ export class ApiError extends Error {
 async function request<T>(
   method: string,
   path: string,
-  body?: unknown
+  body?: unknown,
+  idempotencyKey?: string
 ): Promise<T> {
   const token = localStorage.getItem("token");
 
@@ -21,6 +22,7 @@ async function request<T>(
     "Content-Type": "application/json",
   };
   if (token) headers.Authorization = `Bearer ${token}`;
+    if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey;
 
   const response = await fetch(`${API_URL}${path}`, {
     method,
@@ -43,8 +45,8 @@ async function request<T>(
       // Prefer `detail` (specific) over `title` (generic).
       if (parsed?.detail) message = parsed.detail;
       else if (parsed?.title) message = parsed.title;
-      // Legacy fallback for pre-Phase-1.5 endpoints still returning { error }.
-      else if (parsed?.error) message = parsed.error;
+      
+     
     } catch {
       // Not JSON — use raw text
     }
@@ -59,5 +61,6 @@ async function request<T>(
 
 export const api = {
   get: <T>(path: string) => request<T>("GET", path),
-  post: <T>(path: string, body?: unknown) => request<T>("POST", path, body),
+  post: <T>(path: string, body?: unknown, idempotencyKey?: string) =>
+    request<T>("POST", path, body, idempotencyKey),
 };

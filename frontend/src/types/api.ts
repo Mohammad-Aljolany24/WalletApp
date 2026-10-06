@@ -34,3 +34,8 @@ export interface RegisterResponse {
   id: string;
   email: string;
 }
+
+export interface PagedResponse<T> {
+  items: T[];
+  nextCursor: string | null;
+}

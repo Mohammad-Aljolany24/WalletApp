@@ -71,15 +71,20 @@ public class NewEndpointsTests : IClassFixture<CustomWebApplicationFactory<Progr
         var response = await authed.GetAsync("/wallet/transactions");
         response.StatusCode.Should().Be(HttpStatusCode.OK);
 
-        var txs = await response.Content.ReadFromJsonAsync<List<TransactionResponse>>();
+        var page = await response.Content
+            .ReadFromJsonAsync<PagedResponse<TransactionResponse>>();
 
-        txs.Should().HaveCount(3);
-        txs![0].Type.Should().Be("Withdrawn");
-        txs[0].Amount.Should().Be(30);
-        txs[1].Type.Should().Be("Deposited");
-        txs[1].Amount.Should().Be(50);
-        txs[2].Type.Should().Be("Deposited");
-        txs[2].Amount.Should().Be(100);
+        page.Should().NotBeNull();
+        page!.Items.Should().HaveCount(3);
+        page.Items[0].Type.Should().Be("Withdrawn");
+        page.Items[0].Amount.Should().Be(30);
+        page.Items[1].Type.Should().Be("Deposited");
+        page.Items[1].Amount.Should().Be(50);
+        page.Items[2].Type.Should().Be("Deposited");
+        page.Items[2].Amount.Should().Be(100);
+
+        // Fewer items than the default limit (20) → no more pages.
+        page.NextCursor.Should().BeNull();
     }
 
     [Fact]
@@ -92,8 +97,70 @@ public class NewEndpointsTests : IClassFixture<CustomWebApplicationFactory<Progr
         var response = await authed.GetAsync("/wallet/transactions");
         response.StatusCode.Should().Be(HttpStatusCode.OK);
 
-        var txs = await response.Content.ReadFromJsonAsync<List<TransactionResponse>>();
-        txs.Should().BeEmpty();
+        var page = await response.Content
+            .ReadFromJsonAsync<PagedResponse<TransactionResponse>>();
+
+        page.Should().NotBeNull();
+        page!.Items.Should().BeEmpty();
+        page.NextCursor.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Transactions_Pagination_SecondPageExcludesFirstPage()
+    {
+        var client = _factory.CreateClient();
+        var token = await TestHelpers.RegisterAndVerifyUserAsync(
+            client, _factory.Services, "tx-page@test.com");
+        var authed = AuthedClient(token);
+
+        // Five deposits: 10, 20, 30, 40, 50 → newest first is 50, 40, 30, 20, 10
+        await authed.PostAsync("/wallet/deposit?amount=10", null);
+        await authed.PostAsync("/wallet/deposit?amount=20", null);
+        await authed.PostAsync("/wallet/deposit?amount=30", null);
+        await authed.PostAsync("/wallet/deposit?amount=40", null);
+        await authed.PostAsync("/wallet/deposit?amount=50", null);
+
+        // Page 1: limit=2 → newest two (50, 40) + cursor
+        var page1Response = await authed.GetAsync("/wallet/transactions?limit=2");
+        page1Response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var page1 = await page1Response.Content
+            .ReadFromJsonAsync<PagedResponse<TransactionResponse>>();
+
+        page1.Should().NotBeNull();
+        page1!.Items.Should().HaveCount(2);
+        page1.Items[0].Amount.Should().Be(50);
+        page1.Items[1].Amount.Should().Be(40);
+        page1.NextCursor.Should().NotBeNullOrEmpty();
+
+        // Page 2: fetch with cursor → next two (30, 20)
+        var page2Response = await authed.GetAsync(
+            $"/wallet/transactions?limit=2&cursor={Uri.EscapeDataString(page1.NextCursor!)}");
+        page2Response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var page2 = await page2Response.Content
+            .ReadFromJsonAsync<PagedResponse<TransactionResponse>>();
+
+        page2.Should().NotBeNull();
+        page2!.Items.Should().HaveCount(2);
+        page2.Items[0].Amount.Should().Be(30);
+        page2.Items[1].Amount.Should().Be(20);
+        page2.NextCursor.Should().NotBeNullOrEmpty();
+
+        // No overlap between pages
+        var page1Occurred = page1.Items.Select(t => t.OccurredAt).ToHashSet();
+        var page2Occurred = page2.Items.Select(t => t.OccurredAt).ToHashSet();
+        page1Occurred.Overlaps(page2Occurred).Should().BeFalse();
+
+        // Page 3: last item (10), no more cursor
+        var page3Response = await authed.GetAsync(
+            $"/wallet/transactions?limit=2&cursor={Uri.EscapeDataString(page2.NextCursor!)}");
+        page3Response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var page3 = await page3Response.Content
+            .ReadFromJsonAsync<PagedResponse<TransactionResponse>>();
+
+        page3.Should().NotBeNull();
+        page3!.Items.Should().HaveCount(1);
+        page3.Items[0].Amount.Should().Be(10);
+        page3.NextCursor.Should().BeNull();
     }
 
     // ============================================
@@ -117,9 +184,12 @@ public class NewEndpointsTests : IClassFixture<CustomWebApplicationFactory<Progr
         var raw = await response.Content.ReadAsStringAsync();
         raw.Should().NotContain("passwordHash", "password hashes must never leave the API");
 
-        var users = await response.Content.ReadFromJsonAsync<List<AdminUserResponse>>();
-        users.Should().Contain(u => u.Email == "admin-list@test.com");
-        users.Should().Contain(u => u.Email == "listed-user@test.com");
+        var page = await response.Content
+            .ReadFromJsonAsync<PagedResponse<AdminUserResponse>>();
+
+        page.Should().NotBeNull();
+        page!.Items.Should().Contain(u => u.Email == "admin-list@test.com");
+        page.Items.Should().Contain(u => u.Email == "listed-user@test.com");
     }
 
     [Fact]
@@ -145,4 +215,9 @@ public class NewEndpointsTests : IClassFixture<CustomWebApplicationFactory<Progr
     private record AdminUserResponse(
         Guid Id, string Email, string Role,
         bool IsVerified, bool IsFrozen, DateTime CreatedAt);
+
+    /// <summary>
+    /// Mirrors the wire shape returned by the paginated endpoints.
+    /// </summary>
+    private record PagedResponse<T>(List<T> Items, string? NextCursor);
 }

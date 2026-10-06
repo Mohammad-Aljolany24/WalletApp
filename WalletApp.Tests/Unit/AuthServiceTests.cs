@@ -1,6 +1,7 @@
 using FluentAssertions;
 using Moq;
 using WalletApp.Core.Auth;
+using WalletApp.Core.Exceptions;
 
 namespace WalletApp.Tests.Unit;
 
@@ -80,7 +81,7 @@ public class AuthServiceTests
 
         var act = async () => await service.RegisterAsync("", "password123");
 
-        await act.Should().ThrowAsync<Exception>()
+        await act.Should().ThrowAsync<ValidationException>()
             .WithMessage("*Email*");
     }
 
@@ -91,7 +92,7 @@ public class AuthServiceTests
 
         var act = async () => await service.RegisterAsync("test@test.com", "12345");
 
-        await act.Should().ThrowAsync<Exception>()
+        await act.Should().ThrowAsync<ValidationException>()
             .WithMessage("*6 characters*");
     }
 
@@ -105,7 +106,7 @@ public class AuthServiceTests
 
         var act = async () => await service.RegisterAsync("test@test.com", "password123");
 
-        await act.Should().ThrowAsync<Exception>()
+        await act.Should().ThrowAsync<ValidationException>()
             .WithMessage("*already registered*");
     }
 
@@ -147,8 +148,8 @@ public class AuthServiceTests
 
         var act = async () => await service.LoginAsync("unknown@test.com", "password123");
 
-        await act.Should().ThrowAsync<Exception>()
-            .WithMessage("*Invalid credentials*");
+      await act.Should().ThrowAsync<UnauthorizedException>()
+    .WithMessage("*Invalid email or password*");
     }
 
     [Fact]
@@ -170,7 +171,7 @@ public class AuthServiceTests
 
         var act = async () => await service.LoginAsync("test@test.com", "wrong_password");
 
-        await act.Should().ThrowAsync<Exception>()
-            .WithMessage("*Invalid credentials*");
+      await act.Should().ThrowAsync<UnauthorizedException>()
+    .WithMessage("*Invalid email or password*");
     }
 }
