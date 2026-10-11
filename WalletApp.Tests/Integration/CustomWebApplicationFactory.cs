@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using WalletApp.Data;
@@ -45,5 +46,12 @@ public class CustomWebApplicationFactory<TProgram> : WebApplicationFactory<TProg
             services.AddDbContext<AppDbContext>(options =>
                 options.UseInMemoryDatabase(_dbName));
         });
+        builder.ConfigureAppConfiguration((context, config) =>
+{
+    config.AddInMemoryCollection(new Dictionary<string, string?>
+    {
+        ["RateLimiting:Enabled"] = "false"
+    });
+});
     }
 }

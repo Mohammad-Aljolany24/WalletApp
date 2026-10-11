@@ -23,6 +23,10 @@ using WalletApp.API.Idempotency;
 using WalletApp.Core.Pagination;
 using Serilog;
 using WalletApp.API.Middleware;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
+using WalletApp.API.Health;
+using WalletApp.API.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -138,6 +142,11 @@ builder.Services.AddAuthorization(options =>
 builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
 
+builder.Services.AddHealthChecks()
+    .AddCheck<DatabaseHealthCheck>("database", tags: new[] { "ready" });
+
+    builder.Services.AddApiRateLimiting(builder.Configuration);
+
 
 
 // ============================================
@@ -183,7 +192,31 @@ app.UseSerilogRequestLogging();
 app.UseCors("Frontend");
 
 app.UseAuthentication();
+app.UseRateLimiter();
 app.UseAuthorization();
+
+
+
+// ============================================
+// HEALTH CHECKS
+// ============================================
+
+// Liveness — is the process up? No dependency checks. Fast, always 200
+// unless the app is genuinely dead. Restart signal for orchestrators.
+app.MapHealthChecks("/health", new HealthCheckOptions
+{
+    Predicate = _ => false,
+    ResponseWriter = WriteHealthResponse
+});
+
+// Readiness — can we serve traffic? Checks DB connectivity. Returns 503
+// when a dependency is unreachable so load balancers stop routing here.
+app.MapHealthChecks("/health/ready", new HealthCheckOptions
+{
+    Predicate = check => check.Tags.Contains("ready"),
+    ResponseWriter = WriteHealthResponse
+});
+
 
 // ============================================
 // AUTH ENDPOINTS (public)
@@ -193,13 +226,13 @@ app.MapPost("/auth/register", async (RegisterRequest req, IAuthService auth) =>
 {
     var user = await auth.RegisterAsync(req.Email, req.Password);
     return Results.Ok(new { user.Id, user.Email });
-});
+}).RequireRateLimiting(RateLimitPolicies.Auth);
 
 app.MapPost("/auth/login", async (LoginRequest req, IAuthService auth) =>
 {
     var token = await auth.LoginAsync(req.Email, req.Password);
     return Results.Ok(new { token });
-});
+}).RequireRateLimiting(RateLimitPolicies.Auth);
 
 app.MapGet("/auth/me", async (
     HttpContext ctx,
@@ -233,6 +266,28 @@ static Guid GetUserId(HttpContext ctx)
         throw new UnauthorizedException("Missing or invalid user identity.");
 
     return userId;
+}
+
+
+static Task WriteHealthResponse(HttpContext context, HealthReport report)
+{
+    context.Response.ContentType = "application/json";
+
+    var response = new
+    {
+        status = report.Status.ToString(),
+        checks = report.Entries.Select(e => new
+        {
+            name = e.Key,
+            status = e.Value.Status.ToString(),
+            durationMs = e.Value.Duration.TotalMilliseconds,
+            description = e.Value.Description,
+            error = e.Value.Exception?.Message
+        }),
+        totalDurationMs = report.TotalDuration.TotalMilliseconds
+    };
+
+    return context.Response.WriteAsJsonAsync(response);
 }
 
 app.MapPost("/wallet/deposit", async (
