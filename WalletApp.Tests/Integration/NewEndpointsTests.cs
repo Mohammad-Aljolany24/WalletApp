@@ -34,7 +34,7 @@ public class NewEndpointsTests : IClassFixture<CustomWebApplicationFactory<Progr
         var token = await TestHelpers.RegisterAndLoginAsync(client, "me@test.com");
         var authed = AuthedClient(token);
 
-        var response = await authed.GetAsync("/auth/me");
+        var response = await authed.GetAsync("/api/v1/auth/me");
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = await response.Content.ReadFromJsonAsync<MeResponse>();
@@ -48,7 +48,7 @@ public class NewEndpointsTests : IClassFixture<CustomWebApplicationFactory<Progr
     public async Task Me_WithoutToken_Returns401()
     {
         var client = _factory.CreateClient();
-        var response = await client.GetAsync("/auth/me");
+        var response = await client.GetAsync("/api/v1/auth/me");
         response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
 
@@ -64,11 +64,11 @@ public class NewEndpointsTests : IClassFixture<CustomWebApplicationFactory<Progr
             client, _factory.Services, "tx@test.com");
         var authed = AuthedClient(token);
 
-        await authed.PostAsync("/wallet/deposit?amount=100", null);
-        await authed.PostAsync("/wallet/deposit?amount=50", null);
-        await authed.PostAsync("/wallet/withdraw?amount=30", null);
+        await authed.PostAsync("/api/v1/wallet/deposit?amount=100", null);
+        await authed.PostAsync("/api/v1/wallet/deposit?amount=50", null);
+        await authed.PostAsync("/api/v1/wallet/withdraw?amount=30", null);
 
-        var response = await authed.GetAsync("/wallet/transactions");
+        var response = await authed.GetAsync("/api/v1/wallet/transactions");
         response.StatusCode.Should().Be(HttpStatusCode.OK);
 
         var page = await response.Content
@@ -94,7 +94,7 @@ public class NewEndpointsTests : IClassFixture<CustomWebApplicationFactory<Progr
         var token = await TestHelpers.RegisterAndLoginAsync(client, "empty-tx@test.com");
         var authed = AuthedClient(token);
 
-        var response = await authed.GetAsync("/wallet/transactions");
+        var response = await authed.GetAsync("/api/v1/wallet/transactions");
         response.StatusCode.Should().Be(HttpStatusCode.OK);
 
         var page = await response.Content
@@ -114,14 +114,14 @@ public class NewEndpointsTests : IClassFixture<CustomWebApplicationFactory<Progr
         var authed = AuthedClient(token);
 
         // Five deposits: 10, 20, 30, 40, 50 → newest first is 50, 40, 30, 20, 10
-        await authed.PostAsync("/wallet/deposit?amount=10", null);
-        await authed.PostAsync("/wallet/deposit?amount=20", null);
-        await authed.PostAsync("/wallet/deposit?amount=30", null);
-        await authed.PostAsync("/wallet/deposit?amount=40", null);
-        await authed.PostAsync("/wallet/deposit?amount=50", null);
+        await authed.PostAsync("/api/v1/wallet/deposit?amount=10", null);
+        await authed.PostAsync("/api/v1/wallet/deposit?amount=20", null);
+        await authed.PostAsync("/api/v1/wallet/deposit?amount=30", null);
+        await authed.PostAsync("/api/v1/wallet/deposit?amount=40", null);
+        await authed.PostAsync("/api/v1/wallet/deposit?amount=50", null);
 
         // Page 1: limit=2 → newest two (50, 40) + cursor
-        var page1Response = await authed.GetAsync("/wallet/transactions?limit=2");
+        var page1Response = await authed.GetAsync("/api/v1/wallet/transactions?limit=2");
         page1Response.StatusCode.Should().Be(HttpStatusCode.OK);
         var page1 = await page1Response.Content
             .ReadFromJsonAsync<PagedResponse<TransactionResponse>>();
@@ -134,7 +134,7 @@ public class NewEndpointsTests : IClassFixture<CustomWebApplicationFactory<Progr
 
         // Page 2: fetch with cursor → next two (30, 20)
         var page2Response = await authed.GetAsync(
-            $"/wallet/transactions?limit=2&cursor={Uri.EscapeDataString(page1.NextCursor!)}");
+            $"/api/v1/wallet/transactions?limit=2&cursor={Uri.EscapeDataString(page1.NextCursor!)}");
         page2Response.StatusCode.Should().Be(HttpStatusCode.OK);
         var page2 = await page2Response.Content
             .ReadFromJsonAsync<PagedResponse<TransactionResponse>>();
@@ -146,13 +146,13 @@ public class NewEndpointsTests : IClassFixture<CustomWebApplicationFactory<Progr
         page2.NextCursor.Should().NotBeNullOrEmpty();
 
         // No overlap between pages
-        var page1Occurred = page1.Items.Select(t => t.OccurredAt).ToHashSet();
-        var page2Occurred = page2.Items.Select(t => t.OccurredAt).ToHashSet();
-        page1Occurred.Overlaps(page2Occurred).Should().BeFalse();
+        var page1Amounts = page1.Items.Select(t => t.Amount).ToHashSet();
+        var page2Amounts = page2.Items.Select(t => t.Amount).ToHashSet();
+        page1Amounts.Overlaps(page2Amounts).Should().BeFalse();
 
         // Page 3: last item (10), no more cursor
         var page3Response = await authed.GetAsync(
-            $"/wallet/transactions?limit=2&cursor={Uri.EscapeDataString(page2.NextCursor!)}");
+            $"/api/v1/wallet/transactions?limit=2&cursor={Uri.EscapeDataString(page2.NextCursor!)}");
         page3Response.StatusCode.Should().Be(HttpStatusCode.OK);
         var page3 = await page3Response.Content
             .ReadFromJsonAsync<PagedResponse<TransactionResponse>>();
@@ -178,7 +178,7 @@ public class NewEndpointsTests : IClassFixture<CustomWebApplicationFactory<Progr
         // Create another user so there's something to list.
         await TestHelpers.RegisterAndLoginAsync(client, "listed-user@test.com");
 
-        var response = await adminClient.GetAsync("/admin/users");
+        var response = await adminClient.GetAsync("/api/v1/admin/users");
         response.StatusCode.Should().Be(HttpStatusCode.OK);
 
         var raw = await response.Content.ReadAsStringAsync();
@@ -199,7 +199,7 @@ public class NewEndpointsTests : IClassFixture<CustomWebApplicationFactory<Progr
         var token = await TestHelpers.RegisterAndLoginAsync(client, "not-admin@test.com");
         var authed = AuthedClient(token);
 
-        var response = await authed.GetAsync("/admin/users");
+        var response = await authed.GetAsync("/api/v1/admin/users");
 
         response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
     }

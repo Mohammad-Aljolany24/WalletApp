@@ -12,9 +12,9 @@ public static class TestHelpers
         string email = "test@test.com",
         string password = "password123")
     {
-        await client.PostAsJsonAsync("/auth/register", new { email, password });
+        await client.PostAsJsonAsync("/api/v1/auth/register", new { email, password });
 
-        var response = await client.PostAsJsonAsync("/auth/login", new { email, password });
+        var response = await client.PostAsJsonAsync("/api/v1/auth/login", new { email, password });
         response.EnsureSuccessStatusCode();
 
         var result = await response.Content.ReadFromJsonAsync<LoginResponse>();
@@ -29,9 +29,9 @@ public static class TestHelpers
         string email = "test@test.com",
         string password = "password123")
     {
-        await client.PostAsJsonAsync("/auth/register", new { email, password });
+        await client.PostAsJsonAsync("/api/v1/auth/register", new { email, password });
 
-        var response = await client.PostAsJsonAsync("/auth/login", new { email, password });
+        var response = await client.PostAsJsonAsync("/api/v1/auth/login", new { email, password });
         response.EnsureSuccessStatusCode();
 
         var result = await response.Content.ReadFromJsonAsync<LoginResponse>();
@@ -52,7 +52,7 @@ public static class TestHelpers
     string email = "admin@test.com",
     string password = "password123")
 {
-    await client.PostAsJsonAsync("/auth/register", new { email, password });
+    await client.PostAsJsonAsync("/api/v1/auth/register", new { email, password });
 
     // Promote to Admin out-of-band, then log in fresh so the token carries the role claim.
     using (var scope = services.CreateScope())
@@ -63,7 +63,7 @@ public static class TestHelpers
         await userStore.SaveAsync(user);
     }
 
-    var response = await client.PostAsJsonAsync("/auth/login", new { email, password });
+    var response = await client.PostAsJsonAsync("/api/v1/auth/login", new { email, password });
     response.EnsureSuccessStatusCode();
 
     var result = await response.Content.ReadFromJsonAsync<LoginResponse>();

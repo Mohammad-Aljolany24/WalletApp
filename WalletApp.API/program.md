@@ -22,7 +22,8 @@ Target market: Jordan fintech jobs asking for CQRS, Event Sourcing, SQL depth, J
 - **EF Core 10** + **SQL Server Express** (`.\SQLEXPRESS`, db `WalletAppDb`)
 - **JWT auth** with BCrypt password hashing
 - **ProblemDetails** (RFC 7807) via `IExceptionHandler`
-- **Swagger UI** with Bearer auth
+- **API versioning** — `Asp.Versioning.Http` + `Asp.Versioning.Mvc.ApiExplorer`, URL-segment
+- **Swagger UI** with Bearer auth, one document per API version
 - **xUnit + FluentAssertions + Moq + WebApplicationFactory**
 - **Serilog** — console + rolling file sinks, correlation IDs via LogContext
 - **Rate limiting** — built-in `AddRateLimiter`, two policies
@@ -54,6 +55,7 @@ Target market: Jordan fintech jobs asking for CQRS, Event Sourcing, SQL depth, J
 - **Auth is NOT event-sourced** — Users live in a plain SQL table
 - **Wallet ID = User ID.** Server reads user ID from JWT `sub` claim
 - **DI lifetimes:** anything using `DbContext` is Scoped
+- **API surface is versioned.** Every user-facing route is `/api/v1/...`. Infrastructure endpoints (`/health`, `/health/ready`) are not.
 
 ### Solution structure
 ```
@@ -77,6 +79,9 @@ WalletApp/
 │   ├── RateLimiting/
 │   │   ├── RateLimitPolicies.cs
 │   │   └── RateLimitServiceCollectionExtensions.cs
+│   ├── Versioning/
+│   │   ├── ApiVersioningExtensions.cs
+│   │   └── ConfigureSwaggerOptions.cs
 │   ├── appsettings.json
 │   └── appsettings.Development.json
 ├── WalletApp.Core/
@@ -140,9 +145,9 @@ WalletApp/
         ├── theme.ts                (Slate & Ledger theme)
         ├── api/
         │   ├── client.ts           (fetch wrapper: JWT, idempotency key, ProblemDetails errors)
-        │   ├── auth.ts             (register, login, me)
-        │   ├── wallet.ts           (getBalance, deposit, withdraw, getTransactions — paginated)
-        │   └── admin.ts            (getUsers, verifyUser, freezeUser)
+        │   ├── auth.ts             (register, login, me — BASE = /api/v1/auth)
+        │   ├── wallet.ts           (getBalance, deposit, withdraw, getTransactions — BASE = /api/v1/wallet)
+        │   └── admin.ts            (getUsers, verifyUser, freezeUser — BASE = /api/v1/admin)
         ├── context/
         │   ├── AuthContext.tsx
         │   └── RefreshContext.tsx
@@ -272,6 +277,16 @@ WalletApp/
   - Disabled in integration tests via `RateLimiting:Enabled = false` override in `CustomWebApplicationFactory`
   - **In-memory limiter, per-process.** Multi-instance deployments need a Redis-backed store (Phase 2.5)
 
+- [x] **API versioning.**
+  - `Asp.Versioning.Http` 10.2.2 + `Asp.Versioning.Mvc.ApiExplorer` 10.2.1
+  - URL-segment versioning: every endpoint now lives under `/api/v1/...`
+  - Health checks stay unversioned at `/health`, `/health/ready`
+  - Swagger emits one document per version via `ConfigureSwaggerOptions` reading `IApiVersionDescriptionProvider`
+  - `ReportApiVersions = true` adds the `api-supported-versions` response header
+  - `AssumeDefaultVersionWhenUnspecified = false` — unversioned paths 404 rather than silently falling back
+  - Frontend `api/*.ts` files use a `BASE` constant per resource
+  - Adding v2 later is one `MapGroup(...).MapToApiVersion(v2)` per resource
+
 **Test count: 62 passing.**
 
 ---
@@ -280,7 +295,6 @@ WalletApp/
 
 ### Phase 1.5 (continued)
 
-- [ ] **API versioning.** `/api/v1/...` via `Asp.Versioning.Mvc`. Do before MatchEngine, not after. ~2 hr.
 - [ ] **Refresh tokens.** Users currently re-login every hour. Token rotation + revocation store. ~1 day.
 - [ ] **Password reset.** Email-token flow. **Requires an email provider (Mailtrap / SendGrid / SES). Recommendation: defer to Phase 3.** ~1 day + provider decision.
 - [ ] **GitHub Actions CI.** Build + test on push. Runs on Linux, so needs case-consistency pass on `frontend/src/Pages/` first. ~1 hr.
@@ -351,7 +365,7 @@ Mention in interviews, don't implement:
 
 ### Framing for interviews
 
-> "The architecture is production-grade — event sourcing with optimistic concurrency, CQRS, policy-based auth with fresh-state handlers. The operational concerns — idempotency keys, cursor pagination, structured logging with correlation IDs, health checks, rate limiting — were added in Phase 1.5, after the wallet was working, precisely so MatchEngine could inherit them. I deliberately separated domain architecture from ops because getting event sourcing right is where projects fail, whereas the ops layer is a fixed, well-understood checklist."
+> "The architecture is production-grade — event sourcing with optimistic concurrency, CQRS, policy-based auth with fresh-state handlers. The operational concerns — idempotency keys, cursor pagination, structured logging with correlation IDs, health checks, rate limiting, API versioning — were added in Phase 1.5, after the wallet was working, precisely so MatchEngine could inherit them. I deliberately separated domain architecture from ops because getting event sourcing right is where projects fail, whereas the ops layer is a fixed, well-understood checklist."
 
 ---
 
@@ -407,25 +421,31 @@ Also applies a `RateLimiting:Enabled = false` config override so the test suite 
 
 ## API ENDPOINTS
 
-### Public
-- `POST /auth/register` — `{ email, password }` → `{ id, email }`
-- `POST /auth/login` — `{ email, password }` → `{ token }` (401 on bad creds)
+**All user-facing endpoints are versioned under `/api/v1/`.** Health endpoints are unversioned.
 
-### Authenticated
-- `GET /auth/me` → `{ id, email, role, isVerified, isFrozen }`
-- `GET /wallet/balance` → `{ balance }`
-- `POST /wallet/deposit?amount=100` — requires **AccountNotFrozen**; accepts `Idempotency-Key` header
-- `POST /wallet/withdraw?amount=50` — requires **CanTrade**; accepts `Idempotency-Key` header
-- `GET /wallet/transactions?cursor=<opaque>&limit=20` → `{ items: [{ type, amount, occurredAt }], nextCursor }`
+### Public (`/api/v1`)
+- `POST /api/v1/auth/register` — `{ email, password }` → `{ id, email }`
+- `POST /api/v1/auth/login` — `{ email, password }` → `{ token }` (401 on bad creds)
 
-### Admin
-- `POST /admin/users/{id}/verify` — requires **IsAdmin**
-- `POST /admin/users/{id}/freeze` — requires **IsAdmin**
-- `GET /admin/users?cursor=<opaque>&limit=20` → `{ items: [{ id, email, role, isVerified, isFrozen, createdAt }], nextCursor }` — requires **IsAdmin**
+### Authenticated (`/api/v1`)
+- `GET /api/v1/auth/me` → `{ id, email, role, isVerified, isFrozen }`
+- `GET /api/v1/wallet/balance` → `{ balance }`
+- `POST /api/v1/wallet/deposit?amount=100` — requires **AccountNotFrozen**; accepts `Idempotency-Key` header
+- `POST /api/v1/wallet/withdraw?amount=50` — requires **CanTrade**; accepts `Idempotency-Key` header
+- `GET /api/v1/wallet/transactions?cursor=<opaque>&limit=20` → `{ items: [{ type, amount, occurredAt }], nextCursor }`
 
-### Health (anonymous)
+### Admin (`/api/v1`)
+- `POST /api/v1/admin/users/{id}/verify` — requires **IsAdmin**
+- `POST /api/v1/admin/users/{id}/freeze` — requires **IsAdmin**
+- `GET /api/v1/admin/users?cursor=<opaque>&limit=20` → `{ items: [{ id, email, role, isVerified, isFrozen, createdAt }], nextCursor }` — requires **IsAdmin**
+
+### Health (unversioned, anonymous)
 - `GET /health` — liveness, always 200 unless process is dead
 - `GET /health/ready` — readiness, 503 when SQL Server unreachable
+
+### Versioning headers
+- Responses include `api-supported-versions: 1.0`
+- Unversioned paths (`/auth/login`, `/wallet/balance`) return **404** — deliberate; `AssumeDefaultVersionWhenUnspecified = false`
 
 ### Error responses
 
@@ -516,7 +536,7 @@ Restrained, financial, dark-mode-ready. Neutral grays for chrome, one deep blue 
 
 ### Auth flow
 1. Login → store token in `localStorage` via `AuthContext`
-2. On app load, if token exists, `GET /auth/me` fetches user
+2. On app load, if token exists, `GET /api/v1/auth/me` fetches user
 3. `client.ts` reads token from `localStorage` and injects `Authorization: Bearer <token>`
 4. **Error handling:**
    - **401** → clear token, redirect to `/login`
@@ -525,6 +545,9 @@ Restrained, financial, dark-mode-ready. Neutral grays for chrome, one deep blue 
    - **409** → show "another operation in progress" toast
    - **429** → show ProblemDetails `detail` ("Rate limit exceeded. Please slow down and retry later.")
    - **400** → show ProblemDetails `detail` text
+
+### API versioning on the frontend
+Each file under `src/api/` has a `const BASE = "/api/v1/<resource>"` and concatenates paths onto it. When v2 exists and v1 deprecates, change one constant per file.
 
 ### Three-layer enforcement
 | Layer | Where | Enforces |
@@ -586,11 +609,29 @@ $body = '{\"email\":\"ratelimit@test.com\",\"password\":\"password123\"}'
 
 1..7 | ForEach-Object {
     curl.exe -s -o $null -w "attempt $_ status=%{http_code}`n" `
-      -X POST "http://localhost:5138/auth/login" `
+      -X POST "http://localhost:5138/api/v1/auth/login" `
       -H "Content-Type: application/json" `
       -d $body
 }
 # Expect 401 for attempts 1-5, 429 for attempts 6-7
+```
+
+### Versioning smoke test
+```powershell
+# Old unversioned path → 404
+curl.exe http://localhost:5138/auth/login -i -X POST `
+  -H "Content-Type: application/json" `
+  -d '{\"email\":\"x@x.com\",\"password\":\"x\"}'
+
+# New versioned path → 401 (bad creds) or 200 (valid)
+curl.exe http://localhost:5138/api/v1/auth/login -i -X POST `
+  -H "Content-Type: application/json" `
+  -d '{\"email\":\"x@x.com\",\"password\":\"x\"}'
+
+# Supported-versions header
+curl.exe http://localhost:5138/api/v1/auth/me -i `
+  -H "Authorization: Bearer $token"
+# look for: api-supported-versions: 1.0
 ```
 
 ### Both servers running at once
@@ -663,6 +704,14 @@ $body = '{\"email\":\"ratelimit@test.com\",\"password\":\"password123\"}'
 - In-memory, per-process. Multi-instance needs Redis-backed store (`IRateLimiterStore`).
 - Config values that can be overridden by tests/env vars must be read **lazily**, at request time, not at registration.
 
+### API versioning
+- URL-segment versioning is the simplest, most debuggable scheme. One reader, one obvious URL shape.
+- `MapGroup("/api/v{version:apiVersion}/<resource>")` + `.MapToApiVersion(v1)` — the prefix is defined once per resource.
+- Health checks stay unversioned — infrastructure endpoints don't have API contracts.
+- `AssumeDefaultVersionWhenUnspecified = false` — unversioned paths 404, not silently fall back.
+- One Swagger document per version, discovered via `IApiVersionDescriptionProvider`.
+- Adding v2 later is additive: same group helper, new `.MapToApiVersion(v2)`.
+
 ### React patterns
 - **`useApi<T>` hook** — `{ data, loading, error, refetch }`. Replaces `useState + useEffect` boilerplate for every fetch.
 - **Three-state render** — loading → spinner; error → alert; data → card. Write this every time.
@@ -670,6 +719,7 @@ $body = '{\"email\":\"ratelimit@test.com\",\"password\":\"password123\"}'
 - **`ProtectedRoute`** — checks `token` and `loading`. Redirects if no token. Shows error if unreachable. Renders `<Outlet />` on success.
 - **401 vs 403 vs 429 vs network error** — four different behaviors. Do not conflate them.
 - **Paginated lists** — `useApi` replaces `data` on refetch; paged lists need append semantics, so `TransactionList` and `AdminPage` manage state directly with a `nextCursor` in state.
+- **Versioned API base** — one `const BASE` per `api/*.ts` file. Change once if the version bumps.
 
 ### MUI v6+ gotchas
 - All layout props go in `sx`. `alignItems`, `justifyContent`, `flexGrow`, `mt`, etc. are not top-level.
@@ -706,6 +756,12 @@ $body = '{\"email\":\"ratelimit@test.com\",\"password\":\"password123\"}'
 
 13. **ASP.NET Core config is layered and late-bound.** Reading `builder.Configuration` during `Program.cs` sees only the sources registered so far — test factory overrides, environment variables, and user secrets apply later, during `builder.Build()`. Symptom: an integration test sets a config value but the app doesn't honor it, because the read already happened. Rule: if a value can be overridden by a source you don't control (feature flags, kill switches, environment-specific behavior), read it **lazily — at request time, not registration time.** This bit the rate limiter `Enabled` flag.
 
+14. **`AssumeDefaultVersionWhenUnspecified = false` is the deliberate choice.** Setting it to `true` makes unversioned paths silently resolve to the default version. Convenient at first, painful later: you can never tell which version a client is actually using, and you can never remove the fallback without breaking them. Force the version to be explicit — every request must name its version. 404 on unversioned paths is correct behavior, not a bug.
+
+15. **Moving code around in `Program.cs` can orphan local functions.** When restructuring endpoint mapping into version groups, the `GetUserId` and `WriteHealthResponse` static local functions lived *inside* the section that got replaced. My first pass replaced them without re-declaring them, producing 7 CS0103 errors. Fix: keep helpers in their own section before all endpoint groups. Rule of thumb: if a refactor moves code, list every identifier used later and confirm it still exists.
+
+16. **`app.DescribeApiVersions()` silences AV0027.** Minimal API version groups created with `NewApiVersionSet()` trigger the `AV0027` warning unless the versioning library is told to describe versions. One line above `NewApiVersionSet()` clears it. Not required at runtime, but the warning is noisy and the fix is trivial.
+
 ---
 
 ## WHAT CARRIES TO MATCHENGINE
@@ -715,7 +771,7 @@ $body = '{\"email\":\"ratelimit@test.com\",\"password\":\"password123\"}'
 - `IWalletReadStore` pattern, projection pattern, query handler pattern
 - 3-project structure + test project
 - JWT auth + `Users` table + migrations
-- Swagger config
+- Swagger config + per-version documents
 - Testing setup (xUnit + WebApplicationFactory + Moq)
 - `public partial class Program { }` in API
 - `CustomWebApplicationFactory`
@@ -727,6 +783,7 @@ $body = '{\"email\":\"ratelimit@test.com\",\"password\":\"password123\"}'
 - Serilog config + `CorrelationIdMiddleware`
 - Health checks (`/health`, `/health/ready` + custom `DatabaseHealthCheck`)
 - Rate limiting policies + config-driven `Enabled` flag pattern
+- API versioning (`ApiVersioningExtensions`, `ConfigureSwaggerOptions`, `MapGroup` pattern)
 
 ### Backend — replace domain
 - `Wallet` → `OrderBook` + `Order` + `Wallet`
@@ -740,6 +797,7 @@ $body = '{\"email\":\"ratelimit@test.com\",\"password\":\"password123\"}'
 - Multiple aggregates per command
 - SignalR real-time updates
 - Token-bucket rate limiting for order submission (fixed window allows bursts)
+- Possible `NewVersionedApi("MarketData")` split if market-data endpoints evolve on a different cadence
 
 ### Frontend — copy as-is
 - Vite + TS + MUI + React Router + React Hook Form
@@ -749,6 +807,7 @@ $body = '{\"email\":\"ratelimit@test.com\",\"password\":\"password123\"}'
 - Login / Register / NotFound pages
 - Three-state render pattern
 - Paginated-list pattern (local state + Load more button)
+- Versioned API base (`const BASE = "/api/v1/..."`)
 
 ### Frontend — new
 - Order book display (table, real-time via SignalR)
@@ -777,7 +836,7 @@ weaker base.
 - [x] **Serilog structured logging + correlation IDs.**
 - [x] **Health checks.**
 - [x] **Rate limiting.**
-- [ ] **API versioning.** `/api/v1/...` via `Asp.Versioning.Mvc`.
+- [x] **API versioning.** `/api/v1/...` via `Asp.Versioning.Http` + `.Mvc.ApiExplorer`.
 - [ ] **Refresh tokens.** Users currently re-login every hour.
 - [ ] **Password reset.** Email-token flow. Deferred to Phase 3 (needs provider).
 - [ ] **GitHub Actions CI.** Build + test on push. Runs last.
@@ -836,11 +895,11 @@ Mention these in interviews, don't implement them:
 > "The architecture is production-grade — event sourcing with optimistic
 > concurrency, CQRS, policy-based auth with fresh-state handlers. The
 > operational concerns — idempotency keys, cursor pagination, structured
-> logging with correlation IDs, health checks, rate limiting — were added in
-> Phase 1.5, after the wallet was working, precisely so MatchEngine could
-> inherit them. I deliberately separated domain architecture from ops because
-> getting event sourcing right is where projects fail, whereas the ops layer
-> is a fixed, well-understood checklist."
+> logging with correlation IDs, health checks, rate limiting, API versioning —
+> were added in Phase 1.5, after the wallet was working, precisely so
+> MatchEngine could inherit them. I deliberately separated domain architecture
+> from ops because getting event sourcing right is where projects fail,
+> whereas the ops layer is a fixed, well-understood checklist."
 
 ---
 
@@ -859,30 +918,30 @@ Mention these in interviews, don't implement them:
 ## CURRENT STATE
 
 - **62 backend tests passing**
-- **Backend:** Phase 1 complete + Phase 1.5 (ProblemDetails, idempotency, pagination, Serilog, health checks, rate limiting)
-- **Frontend:** F0–F8 complete — auth works end-to-end, balance displays, deposits/withdrawals update without refresh, transactions paginate, admin table works with verify/freeze
-- **Phase 1.5:** 6 of 9 remaining items done. Left: API versioning, refresh tokens, CI. Password reset deferred to Phase 3.
+- **Backend:** Phase 1 complete + Phase 1.5 (ProblemDetails, idempotency, pagination, Serilog, health checks, rate limiting, API versioning)
+- **Frontend:** F0–F8 complete — auth works end-to-end, balance displays, deposits/withdrawals update without refresh, transactions paginate, admin table works with verify/freeze. All API calls under `/api/v1/`.
+- **Phase 1.5:** 7 of 9 remaining items done. Left: refresh tokens, CI. Password reset deferred to Phase 3.
 - **Repo hygiene:** `.gitignore` in place, build artifacts untracked, README up to date, PROGRESS.md tracked.
 
 ---
 
 ## NEXT ACTION
 
-**API versioning.**
+**Refresh tokens.**
 
-Prefix every route with `/api/v1/...` via `Asp.Versioning.Mvc`. Do it now, before MatchEngine, so its endpoints are born versioned.
+Users currently re-login every hour. Refresh tokens let the client silently obtain a new access token without re-entering credentials.
 
 Key things this step covers:
-- `Asp.Versioning.Mvc` + `Asp.Versioning.Mvc.ApiExplorer` packages
-- `AddApiVersioning` + `AddApiExplorer` registration
-- All endpoint routes move to `/api/v1/...`
-- Health checks stay at `/health`, `/health/ready` (infrastructure, not versioned API surface)
-- Swagger gets a version dropdown
-- Frontend `api/*.ts` files update base paths
-- Integration test paths update across all test files (`/auth/login` → `/api/v1/auth/login`, etc.)
-- `TestHelpers.cs` — the shared helper most affected
+- New `RefreshTokens` table: `Id`, `UserId`, `TokenHash`, `ExpiresAt`, `RevokedAt`, `CreatedAt`
+- `POST /api/v1/auth/refresh` — takes an opaque refresh token, returns a new access token + rotated refresh token
+- Access token lifetime drops to ~15 minutes (short-lived by design)
+- Refresh token lifetime ~7 days, rotated on every use
+- Rotation: the old refresh token is revoked the moment a new one is issued
+- Reuse detection: presenting a previously-rotated token revokes the entire family (indicates theft)
+- Frontend `client.ts` retries once on 401 with a refresh call; on refresh failure, clears session
+- `AuthContext` gains `refreshToken` alongside `token` in `localStorage`
 
-After versioning → refresh tokens → CI (last). Password reset deferred to Phase 3.
+After refresh tokens → GitHub Actions CI (last Phase 1.5 item). Password reset deferred to Phase 3.
 
 ---
 
@@ -890,7 +949,7 @@ After versioning → refresh tokens → CI (last). Password reset deferred to Ph
 
 Paste this entire file and say:
 
-> "Continue from where this PROGRESS.md leaves off. Current state: 62 backend tests passing. Phase 1 complete (WalletApp backend + frontend). Phase 1.5 in progress: ProblemDetails, idempotency keys, cursor pagination, Serilog + correlation IDs, health checks, and rate limiting are done. Remaining Phase 1.5 items: API versioning, refresh tokens, GitHub Actions CI (in that order). Password reset deferred to Phase 3. Next step is API versioning. Give me exact files to create/modify, plus what to test after."
+> "Continue from where this PROGRESS.md leaves off. Current state: 62 backend tests passing. Phase 1 complete (WalletApp backend + frontend). Phase 1.5 in progress: ProblemDetails, idempotency keys, cursor pagination, Serilog + correlation IDs, health checks, rate limiting, and API versioning are done. Remaining Phase 1.5 items: refresh tokens, GitHub Actions CI (in that order). Password reset deferred to Phase 3. Next step is refresh tokens. Give me exact files to create/modify, plus what to test after."
 
 Be specific about wanting:
 - Exact file paths

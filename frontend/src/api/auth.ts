@@ -7,12 +7,14 @@ import type {
   User,
 } from "../types/api";
 
+const BASE = "/api/v1/auth";
+
 export const authApi = {
   register: (data: RegisterRequest) =>
-    api.post<RegisterResponse>("/auth/register", data),
+    api.post<RegisterResponse>(`${BASE}/register`, data),
 
   login: (data: LoginRequest) =>
-    api.post<LoginResponse>("/auth/login", data),
+    api.post<LoginResponse>(`${BASE}/login`, data),
 
-  me: () => api.get<User>("/auth/me"),
+  me: () => api.get<User>(`${BASE}/me`),
 };

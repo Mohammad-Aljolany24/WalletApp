@@ -27,6 +27,9 @@ using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using WalletApp.API.Health;
 using WalletApp.API.RateLimiting;
+using Asp.Versioning;
+using WalletApp.API.Versioning;
+using Asp.Versioning.ApiExplorer;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -50,23 +53,23 @@ builder.Services.AddCors(options =>
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(options =>
 {
-    options.SwaggerDoc("v1", new OpenApiInfo { Title = "WalletApp API", Version = "v1" });
+    options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+    {
+        Name = "Authorization",
+        Type = SecuritySchemeType.Http,
+        Scheme = "bearer",
+        BearerFormat = "JWT",
+        In = ParameterLocation.Header,
+        Description = "Paste your JWT token. Do NOT include 'Bearer' — Swagger adds it automatically."
+    });
 
-  options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
-{
-    Name = "Authorization",
-    Type = SecuritySchemeType.Http,
-    Scheme = "bearer",
-    BearerFormat = "JWT",
-    In = ParameterLocation.Header,
-    Description = "Paste your JWT token. Do NOT include 'Bearer' — Swagger adds it automatically."
+    options.AddSecurityRequirement(document => new OpenApiSecurityRequirement
+    {
+        [new OpenApiSecuritySchemeReference("Bearer", document)] = []
+    });
 });
 
-options.AddSecurityRequirement(document => new OpenApiSecurityRequirement
-{
-    [new OpenApiSecuritySchemeReference("Bearer", document)] = []
-});
-});
+builder.Services.ConfigureOptions<ConfigureSwaggerOptions>();
 
 
 // ============================================
@@ -147,6 +150,8 @@ builder.Services.AddHealthChecks()
 
     builder.Services.AddApiRateLimiting(builder.Configuration);
 
+    builder.Services.AddApiVersioningSupport();
+
 
 
 // ============================================
@@ -181,8 +186,18 @@ var app = builder.Build();
 // Swagger UI (dev only)
 if (app.Environment.IsDevelopment())
 {
+    var provider = app.Services.GetRequiredService<IApiVersionDescriptionProvider>();
+
     app.UseSwagger();
-    app.UseSwaggerUI();
+    app.UseSwaggerUI(options =>
+    {
+        foreach (var description in provider.ApiVersionDescriptions)
+        {
+            options.SwaggerEndpoint(
+                $"/swagger/{description.GroupName}/swagger.json",
+                description.GroupName.ToUpperInvariant());
+        }
+    });
 }
 
 
@@ -219,42 +234,7 @@ app.MapHealthChecks("/health/ready", new HealthCheckOptions
 
 
 // ============================================
-// AUTH ENDPOINTS (public)
-// ============================================
-
-app.MapPost("/auth/register", async (RegisterRequest req, IAuthService auth) =>
-{
-    var user = await auth.RegisterAsync(req.Email, req.Password);
-    return Results.Ok(new { user.Id, user.Email });
-}).RequireRateLimiting(RateLimitPolicies.Auth);
-
-app.MapPost("/auth/login", async (LoginRequest req, IAuthService auth) =>
-{
-    var token = await auth.LoginAsync(req.Email, req.Password);
-    return Results.Ok(new { token });
-}).RequireRateLimiting(RateLimitPolicies.Auth);
-
-app.MapGet("/auth/me", async (
-    HttpContext ctx,
-    IUserStore userStore) =>
-{
-    var userId = GetUserId(ctx);
-    var user = await userStore.GetByIdAsync(userId);
-    if (user is null)
-        return Results.NotFound(new { error = "User not found." });
-
-    return Results.Ok(new
-    {
-        user.Id,
-        user.Email,
-        user.Role,
-        user.IsVerified,
-        user.IsFrozen
-    });
-}).RequireAuthorization();
-
-// ============================================
-// WALLET ENDPOINTS (protected)
+// LOCAL HELPERS
 // ============================================
 
 static Guid GetUserId(HttpContext ctx)
@@ -267,7 +247,6 @@ static Guid GetUserId(HttpContext ctx)
 
     return userId;
 }
-
 
 static Task WriteHealthResponse(HttpContext context, HealthReport report)
 {
@@ -290,7 +269,71 @@ static Task WriteHealthResponse(HttpContext context, HealthReport report)
     return context.Response.WriteAsJsonAsync(response);
 }
 
-app.MapPost("/wallet/deposit", async (
+// ============================================
+// VERSION SET + GROUPS
+// ============================================
+
+app.DescribeApiVersions();
+
+var v1 = new ApiVersion(1, 0);
+
+var versionSet = app.NewApiVersionSet()
+    .HasApiVersion(v1)
+    .ReportApiVersions()
+    .Build();
+
+var authGroup = app.MapGroup("/api/v{version:apiVersion}/auth")
+    .WithApiVersionSet(versionSet)
+    .MapToApiVersion(v1);
+
+var walletGroup = app.MapGroup("/api/v{version:apiVersion}/wallet")
+    .WithApiVersionSet(versionSet)
+    .MapToApiVersion(v1);
+
+var adminGroup = app.MapGroup("/api/v{version:apiVersion}/admin")
+    .WithApiVersionSet(versionSet)
+    .MapToApiVersion(v1);
+
+// ============================================
+// AUTH ENDPOINTS
+// ============================================
+
+authGroup.MapPost("/register", async (RegisterRequest req, IAuthService auth) =>
+{
+    var user = await auth.RegisterAsync(req.Email, req.Password);
+    return Results.Ok(new { user.Id, user.Email });
+}).RequireRateLimiting(RateLimitPolicies.Auth);
+
+authGroup.MapPost("/login", async (LoginRequest req, IAuthService auth) =>
+{
+    var token = await auth.LoginAsync(req.Email, req.Password);
+    return Results.Ok(new { token });
+}).RequireRateLimiting(RateLimitPolicies.Auth);
+
+authGroup.MapGet("/me", async (
+    HttpContext ctx,
+    IUserStore userStore) =>
+{
+    var userId = GetUserId(ctx);
+    var user = await userStore.GetByIdAsync(userId);
+    if (user is null)
+        return Results.NotFound(new { error = "User not found." });
+
+    return Results.Ok(new
+    {
+        user.Id,
+        user.Email,
+        user.Role,
+        user.IsVerified,
+        user.IsFrozen
+    });
+}).RequireAuthorization();
+
+// ============================================
+// WALLET ENDPOINTS
+// ============================================
+
+walletGroup.MapPost("/deposit", async (
     decimal amount,
     HttpContext ctx,
     IEventStore eventStore,
@@ -299,12 +342,10 @@ app.MapPost("/wallet/deposit", async (
     var userId = GetUserId(ctx);
     var events = await eventStore.GetEventsAsync(userId);
     var wallet = Wallet.Rehydrate(userId, events);
-
-    var expectedVersion = wallet.Version;   // <-- snapshot BEFORE mutating
+    var expectedVersion = wallet.Version;
 
     wallet.Deposit(amount);
-
-       await eventStore.AppendAsync(userId, wallet.UncommittedEvents, expectedVersion);
+    await eventStore.AppendAsync(userId, wallet.UncommittedEvents, expectedVersion);
 
     foreach (var evt in wallet.UncommittedEvents)
         await projection.HandleAsync(evt);
@@ -312,10 +353,11 @@ app.MapPost("/wallet/deposit", async (
     wallet.ClearUncommittedEvents();
 
     return Results.Ok(new { balance = wallet.Balance });
-}).AddEndpointFilter<IdempotencyFilter>()
+})
+.AddEndpointFilter<IdempotencyFilter>()
 .RequireAuthorization("AccountNotFrozen");
 
-app.MapPost("/wallet/withdraw", async (
+walletGroup.MapPost("/withdraw", async (
     decimal amount,
     HttpContext ctx,
     IEventStore eventStore,
@@ -324,12 +366,10 @@ app.MapPost("/wallet/withdraw", async (
     var userId = GetUserId(ctx);
     var events = await eventStore.GetEventsAsync(userId);
     var wallet = Wallet.Rehydrate(userId, events);
-
-    var expectedVersion = wallet.Version;   // <-- snapshot BEFORE mutating
+    var expectedVersion = wallet.Version;
 
     wallet.Withdraw(amount);
-
-       await eventStore.AppendAsync(userId, wallet.UncommittedEvents, expectedVersion);
+    await eventStore.AppendAsync(userId, wallet.UncommittedEvents, expectedVersion);
 
     foreach (var evt in wallet.UncommittedEvents)
         await projection.HandleAsync(evt);
@@ -341,7 +381,7 @@ app.MapPost("/wallet/withdraw", async (
 .AddEndpointFilter<IdempotencyFilter>()
 .RequireAuthorization("CanTrade");
 
-app.MapGet("/wallet/balance", async (
+walletGroup.MapGet("/balance", async (
     HttpContext ctx,
     GetBalanceQueryHandler handler) =>
 {
@@ -351,8 +391,7 @@ app.MapGet("/wallet/balance", async (
     return Results.Ok(new { balance });
 }).RequireAuthorization();
 
-
-app.MapGet("/wallet/transactions", async (
+walletGroup.MapGet("/transactions", async (
     HttpContext ctx,
     IEventStore eventStore,
     string? cursor,
@@ -374,18 +413,8 @@ app.MapGet("/wallet/transactions", async (
     var items = paged.Items
         .Select(s => s.Event switch
         {
-            FundsDeposited d => new
-            {
-                Type = "Deposited",
-                Amount = d.Amount,
-                OccurredAt = d.OccurredAt
-            },
-            FundsWithdrawn w => new
-            {
-                Type = "Withdrawn",
-                Amount = w.Amount,
-                OccurredAt = w.OccurredAt
-            },
+            FundsDeposited d => new { Type = "Deposited", Amount = d.Amount, OccurredAt = d.OccurredAt },
+            FundsWithdrawn w => new { Type = "Withdrawn", Amount = w.Amount, OccurredAt = w.OccurredAt },
             _ => null
         })
         .Where(t => t is not null)
@@ -394,14 +423,11 @@ app.MapGet("/wallet/transactions", async (
     return Results.Ok(new { items, nextCursor = paged.NextCursor });
 }).RequireAuthorization();
 
-
-
-
 // ============================================
 // ADMIN ENDPOINTS
 // ============================================
 
-app.MapPost("/admin/users/{id:guid}/verify", async (
+adminGroup.MapPost("/users/{id:guid}/verify", async (
     Guid id,
     IUserStore userStore) =>
 {
@@ -415,7 +441,7 @@ app.MapPost("/admin/users/{id:guid}/verify", async (
     return Results.Ok(new { user.Id, user.IsVerified });
 }).RequireAuthorization("IsAdmin");
 
-app.MapPost("/admin/users/{id:guid}/freeze", async (
+adminGroup.MapPost("/users/{id:guid}/freeze", async (
     Guid id,
     IUserStore userStore) =>
 {
@@ -429,7 +455,7 @@ app.MapPost("/admin/users/{id:guid}/freeze", async (
     return Results.Ok(new { user.Id, user.IsFrozen });
 }).RequireAuthorization("IsAdmin");
 
-app.MapGet("/admin/users", async (
+adminGroup.MapGet("/users", async (
     IUserStore userStore,
     string? cursor,
     int? limit) =>
@@ -463,9 +489,6 @@ app.MapGet("/admin/users", async (
 
     return Results.Ok(new { items, nextCursor = paged.NextCursor });
 }).RequireAuthorization("IsAdmin");
-
-
-
 
 
 try

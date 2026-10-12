@@ -20,7 +20,7 @@ public class AuthEndpointTests : IClassFixture<CustomWebApplicationFactory<Progr
     [Fact]
     public async Task Register_WithValidData_ReturnsUserIdAndEmail()
     {
-        var response = await _client.PostAsJsonAsync("/auth/register", new
+        var response = await _client.PostAsJsonAsync("/api/v1/auth/register", new
         {
             email = "newuser@test.com",
             password = "password123"
@@ -37,13 +37,13 @@ public class AuthEndpointTests : IClassFixture<CustomWebApplicationFactory<Progr
     [Fact]
     public async Task Register_WithDuplicateEmail_ReturnsError()
     {
-        await _client.PostAsJsonAsync("/auth/register", new
+        await _client.PostAsJsonAsync("/api/v1/auth/register", new
         {
             email = "dup@test.com",
             password = "password123"
         });
 
-        var response = await _client.PostAsJsonAsync("/auth/register", new
+        var response = await _client.PostAsJsonAsync("/api/v1/auth/register", new
         {
             email = "dup@test.com",
             password = "password123"
@@ -59,13 +59,13 @@ public class AuthEndpointTests : IClassFixture<CustomWebApplicationFactory<Progr
     [Fact]
     public async Task Login_WithValidCredentials_ReturnsToken()
     {
-        await _client.PostAsJsonAsync("/auth/register", new
+        await _client.PostAsJsonAsync("/api/v1/auth/register", new
         {
             email = "login@test.com",
             password = "password123"
         });
 
-        var response = await _client.PostAsJsonAsync("/auth/login", new
+        var response = await _client.PostAsJsonAsync("/api/v1/auth/login", new
         {
             email = "login@test.com",
             password = "password123"
@@ -81,7 +81,7 @@ public class AuthEndpointTests : IClassFixture<CustomWebApplicationFactory<Progr
     [Fact]
     public async Task Login_WithUnknownEmail_ReturnsError()
     {
-        var response = await _client.PostAsJsonAsync("/auth/login", new
+        var response = await _client.PostAsJsonAsync("/api/v1/auth/login", new
         {
             email = "ghost@test.com",
             password = "password123"
@@ -93,13 +93,13 @@ public class AuthEndpointTests : IClassFixture<CustomWebApplicationFactory<Progr
     [Fact]
     public async Task Login_WithWrongPassword_ReturnsError()
     {
-        await _client.PostAsJsonAsync("/auth/register", new
+        await _client.PostAsJsonAsync("/api/v1/auth/register", new
         {
             email = "wrongpass@test.com",
             password = "password123"
         });
 
-        var response = await _client.PostAsJsonAsync("/auth/login", new
+        var response = await _client.PostAsJsonAsync("/api/v1/auth/login", new
         {
             email = "wrongpass@test.com",
             password = "wrong_password"

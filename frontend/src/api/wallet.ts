@@ -1,6 +1,8 @@
 import { api } from "./client";
 import type { PagedResponse } from "../types/api";
 
+const BASE = "/api/v1/wallet";
+
 export interface BalanceResponse {
   balance: number;
 }
@@ -12,18 +14,18 @@ export interface Transaction {
 }
 
 export const walletApi = {
-  getBalance: () => api.get<BalanceResponse>("/wallet/balance"),
+  getBalance: () => api.get<BalanceResponse>(`${BASE}/balance`),
 
   deposit: (amount: number, idempotencyKey?: string) =>
     api.post<BalanceResponse>(
-      `/wallet/deposit?amount=${amount}`,
+      `${BASE}/deposit?amount=${amount}`,
       undefined,
       idempotencyKey
     ),
 
   withdraw: (amount: number, idempotencyKey?: string) =>
     api.post<BalanceResponse>(
-      `/wallet/withdraw?amount=${amount}`,
+      `${BASE}/withdraw?amount=${amount}`,
       undefined,
       idempotencyKey
     ),
@@ -33,7 +35,7 @@ export const walletApi = {
     if (cursor) params.set("cursor", cursor);
     params.set("limit", limit.toString());
     return api.get<PagedResponse<Transaction>>(
-      `/wallet/transactions?${params.toString()}`
+      `${BASE}/transactions?${params.toString()}`
     );
   },
 };

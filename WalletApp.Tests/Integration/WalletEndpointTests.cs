@@ -2,7 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using FluentAssertions;
-using Microsoft.Extensions.DependencyInjection;   // <-- add
+using Microsoft.Extensions.DependencyInjection;
 
 namespace WalletApp.Tests.Integration;
 
@@ -24,7 +24,7 @@ public class WalletEndpointTests : IClassFixture<CustomWebApplicationFactory<Pro
     {
         var client = _factory.CreateClient();
 
-        var response = await client.PostAsync("/wallet/deposit?amount=100", null);
+        var response = await client.PostAsync("/api/v1/wallet/deposit?amount=100", null);
 
         response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
@@ -34,7 +34,7 @@ public class WalletEndpointTests : IClassFixture<CustomWebApplicationFactory<Pro
     {
         var client = _factory.CreateClient();
 
-        var response = await client.GetAsync("/wallet/balance");
+        var response = await client.GetAsync("/api/v1/wallet/balance");
 
         response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
@@ -55,11 +55,11 @@ public class WalletEndpointTests : IClassFixture<CustomWebApplicationFactory<Pro
             new AuthenticationHeaderValue("Bearer", token);
 
         // Deposit 100
-        var depositResponse = await client.PostAsync("/wallet/deposit?amount=100", null);
+        var depositResponse = await client.PostAsync("/api/v1/wallet/deposit?amount=100", null);
         depositResponse.StatusCode.Should().Be(HttpStatusCode.OK);
 
         // Check balance
-        var balanceResponse = await client.GetAsync("/wallet/balance");
+        var balanceResponse = await client.GetAsync("/api/v1/wallet/balance");
         balanceResponse.StatusCode.Should().Be(HttpStatusCode.OK);
 
         var balance = await balanceResponse.Content.ReadFromJsonAsync<BalanceResponse>();
@@ -75,11 +75,11 @@ public class WalletEndpointTests : IClassFixture<CustomWebApplicationFactory<Pro
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", token);
 
-        await client.PostAsync("/wallet/deposit?amount=100", null);
-        await client.PostAsync("/wallet/deposit?amount=50", null);
-        await client.PostAsync("/wallet/deposit?amount=25", null);
+        await client.PostAsync("/api/v1/wallet/deposit?amount=100", null);
+        await client.PostAsync("/api/v1/wallet/deposit?amount=50", null);
+        await client.PostAsync("/api/v1/wallet/deposit?amount=25", null);
 
-        var balanceResponse = await client.GetAsync("/wallet/balance");
+        var balanceResponse = await client.GetAsync("/api/v1/wallet/balance");
         var balance = await balanceResponse.Content.ReadFromJsonAsync<BalanceResponse>();
 
         balance!.Balance.Should().Be(175);
@@ -94,10 +94,10 @@ public class WalletEndpointTests : IClassFixture<CustomWebApplicationFactory<Pro
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", token);
 
-        await client.PostAsync("/wallet/deposit?amount=100", null);
-        await client.PostAsync("/wallet/withdraw?amount=30", null);
+        await client.PostAsync("/api/v1/wallet/deposit?amount=100", null);
+        await client.PostAsync("/api/v1/wallet/withdraw?amount=30", null);
 
-        var balanceResponse = await client.GetAsync("/wallet/balance");
+        var balanceResponse = await client.GetAsync("/api/v1/wallet/balance");
         var balance = await balanceResponse.Content.ReadFromJsonAsync<BalanceResponse>();
 
         balance!.Balance.Should().Be(70);
@@ -112,9 +112,9 @@ public class WalletEndpointTests : IClassFixture<CustomWebApplicationFactory<Pro
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", token);
 
-        await client.PostAsync("/wallet/deposit?amount=50", null);
+        await client.PostAsync("/api/v1/wallet/deposit?amount=50", null);
 
-        var response = await client.PostAsync("/wallet/withdraw?amount=100", null);
+        var response = await client.PostAsync("/api/v1/wallet/withdraw?amount=100", null);
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
@@ -132,7 +132,7 @@ public class WalletEndpointTests : IClassFixture<CustomWebApplicationFactory<Pro
             client1, "user1@test.com", "password123");
         client1.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", token1);
-        await client1.PostAsync("/wallet/deposit?amount=100", null);
+        await client1.PostAsync("/api/v1/wallet/deposit?amount=100", null);
 
         // User 2 deposits 50
         var client2 = _factory.CreateClient();
@@ -140,12 +140,12 @@ public class WalletEndpointTests : IClassFixture<CustomWebApplicationFactory<Pro
             client2, "user2@test.com", "password123");
         client2.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", token2);
-        await client2.PostAsync("/wallet/deposit?amount=50", null);
+        await client2.PostAsync("/api/v1/wallet/deposit?amount=50", null);
 
         // Verify each sees only their own balance
-        var b1 = await (await client1.GetAsync("/wallet/balance"))
+        var b1 = await (await client1.GetAsync("/api/v1/wallet/balance"))
             .Content.ReadFromJsonAsync<BalanceResponse>();
-        var b2 = await (await client2.GetAsync("/wallet/balance"))
+        var b2 = await (await client2.GetAsync("/api/v1/wallet/balance"))
             .Content.ReadFromJsonAsync<BalanceResponse>();
 
         b1!.Balance.Should().Be(100);
