@@ -10,19 +10,54 @@ export class ApiError extends Error {
   }
 }
 
+const NO_RETRY_PATHS = [
+  "/api/v1/auth/refresh",
+  "/api/v1/auth/login",
+  "/api/v1/auth/register",
+  "/api/v1/auth/logout",
+];
+
+function clearSession() {
+  localStorage.removeItem("accessToken");
+  localStorage.removeItem("refreshToken");
+}
+
+async function tryRefresh(): Promise<boolean> {
+  const refreshToken = localStorage.getItem("refreshToken");
+  if (!refreshToken) return false;
+
+  try {
+    const response = await fetch(`${API_URL}/api/v1/auth/refresh`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refreshToken }),
+    });
+
+    if (!response.ok) return false;
+
+    const data = await response.json();
+    localStorage.setItem("accessToken", data.accessToken);
+    localStorage.setItem("refreshToken", data.refreshToken);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function request<T>(
   method: string,
   path: string,
   body?: unknown,
-  idempotencyKey?: string
+  idempotencyKey?: string,
+  retried = false
 ): Promise<T> {
-  const token = localStorage.getItem("token");
+  const token = localStorage.getItem("accessToken");
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
   if (token) headers.Authorization = `Bearer ${token}`;
-    if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey;
+  if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey;
 
   const response = await fetch(`${API_URL}${path}`, {
     method,
@@ -31,29 +66,33 @@ async function request<T>(
   });
 
   if (response.status === 401) {
-    // Token is bad/expired — clear it. Caller decides whether to redirect.
-    localStorage.removeItem("token");
+    const canRetry =
+      !retried && !NO_RETRY_PATHS.some((p) => path.startsWith(p));
+
+    if (canRetry) {
+      const refreshed = await tryRefresh();
+      if (refreshed) {
+        return request<T>(method, path, body, idempotencyKey, true);
+      }
+    }
+
+    clearSession();
     throw new ApiError(401, "Session expired. Please log in again.");
   }
 
- if (!response.ok) {
+  if (!response.ok) {
     const text = await response.text();
     let message = text || response.statusText;
     try {
       const parsed = JSON.parse(text);
-      // ProblemDetails shape: { type, title, detail, status, traceId }
-      // Prefer `detail` (specific) over `title` (generic).
       if (parsed?.detail) message = parsed.detail;
       else if (parsed?.title) message = parsed.title;
-      
-     
     } catch {
       // Not JSON — use raw text
     }
     throw new ApiError(response.status, message);
   }
 
-  // 204 No Content
   if (response.status === 204) return undefined as T;
 
   return (await response.json()) as T;

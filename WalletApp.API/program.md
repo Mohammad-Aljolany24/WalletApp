@@ -21,6 +21,7 @@ Target market: Jordan fintech jobs asking for CQRS, Event Sourcing, SQL depth, J
 - **4 projects:** `WalletApp.API`, `WalletApp.Core`, `WalletApp.Data`, `WalletApp.Tests`
 - **EF Core 10** + **SQL Server Express** (`.\SQLEXPRESS`, db `WalletAppDb`)
 - **JWT auth** with BCrypt password hashing
+- **Refresh tokens** — rotation, family revocation on reuse, silent frontend retry
 - **ProblemDetails** (RFC 7807) via `IExceptionHandler`
 - **API versioning** — `Asp.Versioning.Http` + `Asp.Versioning.Mvc.ApiExplorer`, URL-segment
 - **Swagger UI** with Bearer auth, one document per API version
@@ -34,7 +35,7 @@ Target market: Jordan fintech jobs asking for CQRS, Event Sourcing, SQL depth, J
 - **React 19** — function components + hooks only
 - **React Router 7**
 - **React Hook Form** — form validation
-- **`fetch` + custom wrapper** (no axios)
+- **`fetch` + custom wrapper** (no axios) — silent 401 retry via refresh token
 - **React Context** — auth + refresh invalidation
 - **MUI 9** — component library with responsive system
 - **Inter** font via `@fontsource/inter`
@@ -102,7 +103,9 @@ WalletApp/
 │   │   ├── User.cs                 (Id, Email, PasswordHash, CreatedAt, Role, IsVerified, IsFrozen)
 │   │   ├── IUserStore.cs
 │   │   ├── IPasswordHasher.cs
-│   │   ├── ITokenService.cs
+│   │   ├── ITokenService.cs        (GenerateAccessToken, GenerateRefreshToken, HashRefreshToken)
+│   │   ├── IRefreshTokenStore.cs
+│   │   ├── RefreshTokenData.cs
 │   │   ├── IAuthService.cs
 │   │   ├── AuthService.cs
 │   │   └── Requirements/
@@ -114,17 +117,23 @@ WalletApp/
 │   └── ReadModels/ (WalletReadModel, IWalletReadStore)
 ├── WalletApp.Data/
 │   ├── AppDbContext.cs
+│   ├── AppDbContextFactory.cs      (design-time factory for EF CLI tools)
 │   ├── Entities/
 │   │   ├── EventRecord.cs
 │   │   ├── WalletReadRecord.cs
 │   │   ├── UserRecord.cs
-│   │   └── IdempotencyRecord.cs
-│   ├── Auth/ (BcryptPasswordHasher, JwtTokenService, SqlUserStore)
+│   │   ├── IdempotencyRecord.cs
+│   │   └── RefreshTokenRecord.cs
+│   ├── Auth/
+│   │   ├── BcryptPasswordHasher.cs
+│   │   ├── JwtTokenService.cs
+│   │   ├── SqlUserStore.cs
+│   │   └── SqlRefreshTokenStore.cs
 │   ├── EventStore/SqlEventStore.cs
 │   ├── ReadModels/SqlWalletReadStore.cs
 │   └── Migrations/
 ├── WalletApp.Tests/
-│   ├── Unit/ (WalletTests 15, WalletProjectionTests 6, AuthServiceTests 9)
+│   ├── Unit/ (WalletTests 15, WalletProjectionTests 6, AuthServiceTests 15)
 │   └── Integration/
 │       ├── CustomWebApplicationFactory.cs
 │       ├── TestHelpers.cs
@@ -144,12 +153,12 @@ WalletApp/
         ├── App.tsx                 (BrowserRouter + AuthProvider + RefreshProvider + Routes)
         ├── theme.ts                (Slate & Ledger theme)
         ├── api/
-        │   ├── client.ts           (fetch wrapper: JWT, idempotency key, ProblemDetails errors)
-        │   ├── auth.ts             (register, login, me — BASE = /api/v1/auth)
+        │   ├── client.ts           (fetch wrapper: JWT, idempotency key, 401 retry via refresh, ProblemDetails errors)
+        │   ├── auth.ts             (register, login, me, logout — BASE = /api/v1/auth)
         │   ├── wallet.ts           (getBalance, deposit, withdraw, getTransactions — BASE = /api/v1/wallet)
         │   └── admin.ts            (getUsers, verifyUser, freezeUser — BASE = /api/v1/admin)
         ├── context/
-        │   ├── AuthContext.tsx
+        │   ├── AuthContext.tsx     (stores accessToken + refreshToken in localStorage)
         │   └── RefreshContext.tsx
         ├── hooks/useApi.ts
         ├── components/
@@ -287,7 +296,22 @@ WalletApp/
   - Frontend `api/*.ts` files use a `BASE` constant per resource
   - Adding v2 later is one `MapGroup(...).MapToApiVersion(v2)` per resource
 
-**Test count: 62 passing.**
+- [x] **Refresh tokens.**
+  - Short-lived access token (15 min via `Jwt:AccessTokenMinutes`) + opaque refresh token (7 days via `Jwt:RefreshTokenDays`)
+  - `RefreshTokens` table: `Id`, `UserId`, `TokenHash` (SHA-256, unique index), `FamilyId`, `ExpiresAt`, `CreatedAt`, `RevokedAt`, `ReplacedByTokenId`
+  - Migration `AddRefreshTokens`
+  - **Rotation on every refresh:** old token revoked, new one issued in the same `FamilyId`
+  - **Theft detection:** reuse of a revoked token revokes the entire family
+  - `POST /api/v1/auth/refresh` — takes a refresh token, returns a new access + refresh pair
+  - `POST /api/v1/auth/logout` — revokes the refresh token server-side, returns 204
+  - Login response shape changed: `{ accessToken, refreshToken, accessTokenExpiresAt }` (was `{ token }`)
+  - Frontend `client.ts` silently retries once on 401 by calling `/refresh`; on failure clears session
+  - `ClockSkew = TimeSpan.Zero` on `TokenValidationParameters` — otherwise the 5-minute default masks expiry during testing
+  - Refresh endpoint deliberately NOT under the strict auth rate limiter (256-bit random token; brute-force is infeasible). Global limiter still applies.
+  - Access/refresh tokens stored in `localStorage` (`accessToken`, `refreshToken`)
+  - Expired refresh tokens not purged — cleanup deferred to Phase 2.5 Hangfire
+
+**Test count: 72 passing.**
 
 ---
 
@@ -295,8 +319,6 @@ WalletApp/
 
 ### Phase 1.5 (continued)
 
-- [ ] **Refresh tokens.** Users currently re-login every hour. Token rotation + revocation store. ~1 day.
-- [ ] **Password reset.** Email-token flow. **Requires an email provider (Mailtrap / SendGrid / SES). Recommendation: defer to Phase 3.** ~1 day + provider decision.
 - [ ] **GitHub Actions CI.** Build + test on push. Runs on Linux, so needs case-consistency pass on `frontend/src/Pages/` first. ~1 hr.
 
 **Case-consistency fix before CI:**
@@ -325,10 +347,11 @@ MatchEngine-specific additions:
 - [ ] **Docker + Docker Compose.** API + SQL Server + Redis.
 - [ ] **Redis caching for order books.**
 - [ ] **Distributed rate limiting** (Redis-backed) so limits apply across instances.
-- [ ] **Hangfire background jobs.** Settlement polling, price alerts, **idempotency record TTL cleanup** (`DELETE FROM IdempotencyRecords WHERE ExpiresAt < GETUTCDATE()`).
+- [ ] **Hangfire background jobs.** Settlement polling, price alerts, **idempotency record TTL cleanup** (`DELETE FROM IdempotencyRecords WHERE ExpiresAt < GETUTCDATE()`), **refresh token TTL cleanup** (`DELETE FROM RefreshTokens WHERE ExpiresAt < GETUTCDATE()`).
 - [ ] **Audit log query endpoint.** Free from event sourcing.
 - [ ] **CI/CD to a real environment.** Deploy pipeline.
 - [ ] **Suppress exception messages in health check response body** for production.
+- [ ] **Distributed refresh token revocation** — if multiple instances run, revocation in one instance must be visible to all (currently fine — the store is SQL Server, so it's already shared).
 
 ### Phase 3 — Full Trading Platform
 
@@ -362,10 +385,12 @@ Mention in interviews, don't implement:
 - Blue-green deploys
 - Feature flags (LaunchDarkly-style)
 - HTTPS termination (nginx / Caddy) — cloud providers handle it
+- Password reset — needs an email provider, no portfolio value
+- HTTP-only cookies for refresh tokens — localStorage is XSS-vulnerable but the cookie flow requires CSRF protection + CORS credentials + cookie config
 
 ### Framing for interviews
 
-> "The architecture is production-grade — event sourcing with optimistic concurrency, CQRS, policy-based auth with fresh-state handlers. The operational concerns — idempotency keys, cursor pagination, structured logging with correlation IDs, health checks, rate limiting, API versioning — were added in Phase 1.5, after the wallet was working, precisely so MatchEngine could inherit them. I deliberately separated domain architecture from ops because getting event sourcing right is where projects fail, whereas the ops layer is a fixed, well-understood checklist."
+> "The architecture is production-grade — event sourcing with optimistic concurrency, CQRS, policy-based auth with fresh-state handlers, refresh tokens with rotation and theft detection. The operational concerns — idempotency keys, cursor pagination, structured logging with correlation IDs, health checks, rate limiting, API versioning — were added in Phase 1.5, after the wallet was working, precisely so MatchEngine could inherit them. I deliberately separated domain architecture from ops because getting event sourcing right is where projects fail, whereas the ops layer is a fixed, well-understood checklist."
 
 ---
 
@@ -373,12 +398,12 @@ Mention in interviews, don't implement:
 
 **Test each piece right after it works, before moving on.**
 
-### Current coverage (62 tests)
+### Current coverage (72 tests)
 
-**Unit (30):** Wallet aggregate, WalletProjection, AuthService
+**Unit (36):** Wallet aggregate (15), WalletProjection (6), AuthService (15)
 
-**Integration (32):**
-- `AuthEndpointTests` — register, login, errors
+**Integration (36):**
+- `AuthEndpointTests` — register, login, refresh, rotation, theft detection, logout, errors
 - `WalletEndpointTests` — auth requirement, full flow, user isolation
 - `AuthorizationTests` — policy paths, freeze-immediate-effect, admin workflows
 - `ConcurrencyTests` — real SQL Server, concurrent append, one wins
@@ -396,6 +421,8 @@ Must remove **ALL** EF Core registrations before adding InMemory:
 
 Also applies a `RateLimiting:Enabled = false` config override so the test suite isn't throttled by the auth limiter (5/min/IP shared across the whole run).
 
+Also needs a design-time factory (`AppDbContextFactory`) because EF CLI tools can't reliably execute the API's complex `Program.cs` startup path.
+
 ---
 
 ## DATABASE
@@ -408,6 +435,7 @@ Also applies a `RateLimiting:Enabled = false` config override so the test suite 
 - **`WalletReadModel`** — `WalletId`, `Balance`
 - **`Users`** — `Id`, `Email` (unique), `PasswordHash`, `CreatedAt`, `Role`, `IsVerified`, `IsFrozen`
 - **`IdempotencyRecords`** — composite PK `(UserId, Key)`; `Endpoint`, `StatusCode`, `ResponseBody`, `CreatedAt`, `ExpiresAt` (indexed for future TTL cleanup)
+- **`RefreshTokens`** — `Id` (PK), `UserId` (indexed), `TokenHash` (unique index, SHA-256), `FamilyId` (indexed), `ExpiresAt`, `CreatedAt`, `RevokedAt` (nullable), `ReplacedByTokenId` (nullable, forensics)
 - **`__EFMigrationsHistory`**
 
 ### Migrations applied
@@ -416,6 +444,7 @@ Also applies a `RateLimiting:Enabled = false` config override so the test suite 
 3. `AddEventVersion` (with `ROW_NUMBER()` backfill — hand-edited)
 4. `AddUserPolicyFields` (Role default `"User"` — hand-edited)
 5. `AddIdempotencyRecords`
+6. `AddRefreshTokens`
 
 ---
 
@@ -425,7 +454,9 @@ Also applies a `RateLimiting:Enabled = false` config override so the test suite 
 
 ### Public (`/api/v1`)
 - `POST /api/v1/auth/register` — `{ email, password }` → `{ id, email }`
-- `POST /api/v1/auth/login` — `{ email, password }` → `{ token }` (401 on bad creds)
+- `POST /api/v1/auth/login` — `{ email, password }` → `{ accessToken, refreshToken, accessTokenExpiresAt }` (401 on bad creds)
+- `POST /api/v1/auth/refresh` — `{ refreshToken }` → new `{ accessToken, refreshToken, accessTokenExpiresAt }` (401 on invalid/revoked/expired; revokes family on reuse)
+- `POST /api/v1/auth/logout` — `{ refreshToken }` → 204 (revokes token)
 
 ### Authenticated (`/api/v1`)
 - `GET /api/v1/auth/me` → `{ id, email, role, isVerified, isFrozen }`
@@ -456,7 +487,7 @@ All failures return RFC 7807 ProblemDetails:
 | `ValidationException` | 400 | Bad input |
 | `InsufficientFundsException` | 400 | Withdrawal exceeds balance (extends `ValidationException`) |
 | `NotFoundException` | 404 | Aggregate or user not found |
-| `UnauthorizedException` | 401 | Missing/invalid identity |
+| `UnauthorizedException` | 401 | Missing/invalid identity, bad creds, invalid/revoked/expired refresh token |
 | `ConcurrencyException` | 409 | Version conflict on append |
 | Rate limiter | 429 | Too many requests (with `Retry-After`) |
 | *(anything else)* | 500 | Message suppressed, full exception logged |
@@ -535,16 +566,25 @@ Restrained, financial, dark-mode-ready. Neutral grays for chrome, one deep blue 
 **MUI v6+ rule:** all layout props go in `sx`, not as direct props. `alignItems`, `justifyContent`, `flexGrow`, `mt`, `p`, etc. — none of them are top-level props anymore. Only component-specific props (Stack's `direction`/`spacing`, Button's `variant`/`color`, etc.) stay as props.
 
 ### Auth flow
-1. Login → store token in `localStorage` via `AuthContext`
-2. On app load, if token exists, `GET /api/v1/auth/me` fetches user
-3. `client.ts` reads token from `localStorage` and injects `Authorization: Bearer <token>`
-4. **Error handling:**
-   - **401** → clear token, redirect to `/login`
+1. Login → server returns `{ accessToken, refreshToken, accessTokenExpiresAt }`
+2. `AuthContext` stores `accessToken` and `refreshToken` in `localStorage`
+3. On app load, if `accessToken` exists, `GET /api/v1/auth/me` fetches user
+4. `client.ts` reads `accessToken` from `localStorage` and injects `Authorization: Bearer <token>`
+5. **On 401:** `client.ts` calls `/api/v1/auth/refresh` once, rotates both tokens, retries the original request
+6. **On refresh failure:** both tokens cleared, `AuthError` thrown, `AuthContext` redirects to `/login`
+7. **Error handling:**
+   - **401** (unrecoverable) → clear session, redirect to `/login`
    - **403** → show toast (do NOT log out) — used for policy violations
    - **5xx / network error** → keep session, show "server unreachable" screen with Retry + Log out
    - **409** → show "another operation in progress" toast
    - **429** → show ProblemDetails `detail` ("Rate limit exceeded. Please slow down and retry later.")
    - **400** → show ProblemDetails `detail` text
+
+### Logout flow
+1. User clicks logout
+2. `AuthContext.logout()` fires `authApi.logout(refreshToken)` (fire-and-forget)
+3. `localStorage` cleared, state reset, redirect to `/login`
+4. Server revokes the refresh token; subsequent refresh attempts 401
 
 ### API versioning on the frontend
 Each file under `src/api/` has a `const BASE = "/api/v1/<resource>"` and concatenates paths onto it. When v2 exists and v1 deprecates, change one constant per file.
@@ -634,6 +674,32 @@ curl.exe http://localhost:5138/api/v1/auth/me -i `
 # look for: api-supported-versions: 1.0
 ```
 
+### Refresh token smoke test
+```powershell
+# 1. Login → capture accessToken and refreshToken
+curl.exe -X POST "http://localhost:5138/api/v1/auth/login" `
+  -H "Content-Type: application/json" `
+  -d '{\"email\":\"<user>\",\"password\":\"<pass>\"}'
+
+# 2. Refresh → new pair
+curl.exe -X POST "http://localhost:5138/api/v1/auth/refresh" `
+  -H "Content-Type: application/json" `
+  -d '{\"refreshToken\":\"<the-refresh-token>\"}'
+
+# 3. Replay the original refresh token → 401 (theft detection)
+# 4. Try the rotated token → also 401 (family revoked)
+# 5. Logout with a fresh token → 204, then refresh → 401
+```
+
+### Access-token expiry test (in-browser)
+1. Set `"AccessTokenMinutes": 1` in `appsettings.json`
+2. Restart the API
+3. Log out, log in fresh
+4. Do a manual request (hard reload or deposit)
+5. Wait 65 seconds
+6. Do another manual request → expect 401 → silent refresh → 200 (three-request pattern in DevTools Network)
+7. Restore `"AccessTokenMinutes": 15`
+
 ### Both servers running at once
 - Terminal 1: `dotnet run --project WalletApp.API` (port 5138)
 - Terminal 2: `cd frontend && npm run dev` (port 5173)
@@ -712,6 +778,16 @@ curl.exe http://localhost:5138/api/v1/auth/me -i `
 - One Swagger document per version, discovered via `IApiVersionDescriptionProvider`.
 - Adding v2 later is additive: same group helper, new `.MapToApiVersion(v2)`.
 
+### Refresh tokens
+- **Access token:** short-lived JWT (15 min). Baked with user claims. Stateless.
+- **Refresh token:** opaque 256-bit random string (base64url). Stored server-side as SHA-256 hash. Never plaintext.
+- **Rotation:** every successful refresh revokes the old token and issues a new one in the same family.
+- **Family:** all tokens issued from one login share a `FamilyId`.
+- **Theft detection:** reuse of a revoked token revokes the entire family.
+- **Why SHA-256 not BCrypt:** refresh tokens are high-entropy random values. Brute force is infeasible, so BCrypt's slowness adds nothing.
+- **Why not HTTP-only cookies:** XSS-vulnerable in localStorage, but cookie flow requires CSRF + CORS credentials + cookie config. Portfolio-appropriate tradeoff.
+- **Why `/refresh` skips the strict auth rate limiter:** the refresh token itself is the credential (256-bit random). Global limiter still applies.
+
 ### React patterns
 - **`useApi<T>` hook** — `{ data, loading, error, refetch }`. Replaces `useState + useEffect` boilerplate for every fetch.
 - **Three-state render** — loading → spinner; error → alert; data → card. Write this every time.
@@ -720,6 +796,7 @@ curl.exe http://localhost:5138/api/v1/auth/me -i `
 - **401 vs 403 vs 429 vs network error** — four different behaviors. Do not conflate them.
 - **Paginated lists** — `useApi` replaces `data` on refetch; paged lists need append semantics, so `TransactionList` and `AdminPage` manage state directly with a `nextCursor` in state.
 - **Versioned API base** — one `const BASE` per `api/*.ts` file. Change once if the version bumps.
+- **Silent refresh in `client.ts`** — one-shot retry on 401. Guarded by a `retried` flag so it can't loop. Auth endpoints (`/login`, `/register`, `/refresh`, `/logout`) are excluded from retry to prevent recursion.
 
 ### MUI v6+ gotchas
 - All layout props go in `sx`. `alignItems`, `justifyContent`, `flexGrow`, `mt`, etc. are not top-level.
@@ -762,6 +839,14 @@ curl.exe http://localhost:5138/api/v1/auth/me -i `
 
 16. **`app.DescribeApiVersions()` silences AV0027.** Minimal API version groups created with `NewApiVersionSet()` trigger the `AV0027` warning unless the versioning library is told to describe versions. One line above `NewApiVersionSet()` clears it. Not required at runtime, but the warning is noisy and the fix is trivial.
 
+17. **JWT clock skew defaults to 5 minutes.** `TokenValidationParameters.ClockSkew` is 5 minutes by default, so a token that "expired" 4 minutes ago is still accepted. Symptom: testing token expiry with a short-lived access token (e.g. `AccessTokenMinutes: 1`) shows no 401 for ~6 minutes, so the refresh flow never fires and you think it's broken. Fix: `ClockSkew = TimeSpan.Zero` (or a small buffer like 30 seconds) explicitly in the config. Left unset, every test of the refresh flow gives a false negative.
+
+18. **EF CLI tools can't reliably run the API's startup.** `dotnet ef migrations add` tries to construct `AppDbContext` by starting the API project and reading its DI container. Complex `Program.cs` files — with Serilog bootstrap, try/catch around `app.Run()`, and versioning setup — break this. Fix: add an `AppDbContextFactory : IDesignTimeDbContextFactory<AppDbContext>` with the connection string hardcoded. Design-time only; not used in production. Symptom: `Unable to resolve service for type 'DbContextOptions<AppDbContext>' while attempting to activate 'AppDbContext'`.
+
+19. **DI can't resolve primitive constructor parameters.** `AddScoped<IAuthService, AuthService>()` fails if `AuthService` has an `int refreshTokenDays` parameter — DI has no `int` registered. Use a factory lambda: `AddScoped<IAuthService>(sp => new AuthService(..., refreshTokenDays))`. Symptom: `Unable to resolve service for type 'System.Int32'`.
+
+20. **Don't look up what you just saved.** `IssueTokensAsync` originally created a refresh record, saved it, then `RefreshAsync` had to re-query by hash to get the record's `Id` for linking the old token to its successor. Two problems: extra DB round-trip, and it breaks under mocking (mock `SaveAsync` doesn't populate anything so the subsequent lookup returns null). Fix: have the helper return `(AuthTokens, Guid RefreshTokenId)`. Rule of thumb: if a function creates something, it should return the identifier.
+
 ---
 
 ## WHAT CARRIES TO MATCHENGINE
@@ -770,7 +855,7 @@ curl.exe http://localhost:5138/api/v1/auth/me -i `
 - `IEventStore` / `SqlEventStore`
 - `IWalletReadStore` pattern, projection pattern, query handler pattern
 - 3-project structure + test project
-- JWT auth + `Users` table + migrations
+- JWT auth + refresh tokens + `Users` + `RefreshTokens` tables + migrations
 - Swagger config + per-version documents
 - Testing setup (xUnit + WebApplicationFactory + Moq)
 - `public partial class Program { }` in API
@@ -784,6 +869,8 @@ curl.exe http://localhost:5138/api/v1/auth/me -i `
 - Health checks (`/health`, `/health/ready` + custom `DatabaseHealthCheck`)
 - Rate limiting policies + config-driven `Enabled` flag pattern
 - API versioning (`ApiVersioningExtensions`, `ConfigureSwaggerOptions`, `MapGroup` pattern)
+- Refresh token flow (`ITokenService`, `IRefreshTokenStore`, `AuthService` rotation + theft detection)
+- `AppDbContextFactory` for EF CLI tools
 
 ### Backend — replace domain
 - `Wallet` → `OrderBook` + `Order` + `Wallet`
@@ -802,7 +889,7 @@ curl.exe http://localhost:5138/api/v1/auth/me -i `
 ### Frontend — copy as-is
 - Vite + TS + MUI + React Router + React Hook Form
 - `theme.ts` (Slate & Ledger)
-- `client.ts`, `useApi`, `AuthContext`, `RefreshContext`
+- `client.ts` (with silent 401 retry via refresh), `useApi`, `AuthContext`, `RefreshContext`
 - `ProtectedRoute`, `AdminRoute`, `Layout`
 - Login / Register / NotFound pages
 - Three-state render pattern
@@ -837,8 +924,8 @@ weaker base.
 - [x] **Health checks.**
 - [x] **Rate limiting.**
 - [x] **API versioning.** `/api/v1/...` via `Asp.Versioning.Http` + `.Mvc.ApiExplorer`.
-- [ ] **Refresh tokens.** Users currently re-login every hour.
-- [ ] **Password reset.** Email-token flow. Deferred to Phase 3 (needs provider).
+- [x] **Refresh tokens.** Access + refresh, rotation, family revocation on reuse, silent frontend retry.
+- [ ] **Password reset.** Email-token flow. **Deferred to Phase 3** (needs provider).
 - [ ] **GitHub Actions CI.** Build + test on push. Runs last.
 
 ### Phase 2 — MatchEngine (during the build)
@@ -855,7 +942,7 @@ Reuses everything from WalletApp. New additions specific to MatchEngine:
 - [ ] **Docker + Docker Compose.** API + SQL Server + Redis on one command.
 - [ ] **Redis caching for order books.** Hot read models.
 - [ ] **Distributed rate limiting** (Redis-backed) so limits apply across instances.
-- [ ] **Hangfire background jobs.** Settlement polling, price alerts, idempotency record TTL cleanup.
+- [ ] **Hangfire background jobs.** Settlement polling, price alerts, idempotency record TTL cleanup, refresh token TTL cleanup.
 - [ ] **Audit log query endpoint.** Free from event sourcing.
 - [ ] **CI/CD to a real environment.** Deploy pipeline.
 - [ ] **Suppress exception messages in health check response body.**
@@ -893,13 +980,14 @@ Mention these in interviews, don't implement them:
 ### Framing for interviews
 
 > "The architecture is production-grade — event sourcing with optimistic
-> concurrency, CQRS, policy-based auth with fresh-state handlers. The
-> operational concerns — idempotency keys, cursor pagination, structured
-> logging with correlation IDs, health checks, rate limiting, API versioning —
-> were added in Phase 1.5, after the wallet was working, precisely so
-> MatchEngine could inherit them. I deliberately separated domain architecture
-> from ops because getting event sourcing right is where projects fail,
-> whereas the ops layer is a fixed, well-understood checklist."
+> concurrency, CQRS, policy-based auth with fresh-state handlers, refresh
+> tokens with rotation and theft detection. The operational concerns —
+> idempotency keys, cursor pagination, structured logging with correlation
+> IDs, health checks, rate limiting, API versioning — were added in Phase 1.5,
+> after the wallet was working, precisely so MatchEngine could inherit them. I
+> deliberately separated domain architecture from ops because getting event
+> sourcing right is where projects fail, whereas the ops layer is a fixed,
+> well-understood checklist."
 
 ---
 
@@ -917,31 +1005,23 @@ Mention these in interviews, don't implement them:
 
 ## CURRENT STATE
 
-- **62 backend tests passing**
-- **Backend:** Phase 1 complete + Phase 1.5 (ProblemDetails, idempotency, pagination, Serilog, health checks, rate limiting, API versioning)
-- **Frontend:** F0–F8 complete — auth works end-to-end, balance displays, deposits/withdrawals update without refresh, transactions paginate, admin table works with verify/freeze. All API calls under `/api/v1/`.
-- **Phase 1.5:** 7 of 9 remaining items done. Left: refresh tokens, CI. Password reset deferred to Phase 3.
+- **72 backend tests passing**
+- **Backend:** Phase 1 complete + Phase 1.5 (ProblemDetails, idempotency, pagination, Serilog, health checks, rate limiting, API versioning, refresh tokens)
+- **Frontend:** F0–F8 complete + refresh token flow — auth works end-to-end, balance displays, deposits/withdrawals update without refresh, transactions paginate, admin table works with verify/freeze. Silent 401 retry via refresh token verified. All API calls under `/api/v1/`.
+- **Phase 1.5:** 8 of 9 items done. Only CI remaining. Password reset deferred to Phase 3.
 - **Repo hygiene:** `.gitignore` in place, build artifacts untracked, README up to date, PROGRESS.md tracked.
 
 ---
 
 ## NEXT ACTION
 
-**Refresh tokens.**
+**Two small items before Phase 2.**
 
-Users currently re-login every hour. Refresh tokens let the client silently obtain a new access token without re-entering credentials.
+1. **Case-consistency fix on the frontend.** Rename `frontend/src/Pages/` → `frontend/src/pages/` and update every import. ~15 min. This is a hard prerequisite for CI — Linux treats the two folder names as different and the build will fail on GitHub's runners.
 
-Key things this step covers:
-- New `RefreshTokens` table: `Id`, `UserId`, `TokenHash`, `ExpiresAt`, `RevokedAt`, `CreatedAt`
-- `POST /api/v1/auth/refresh` — takes an opaque refresh token, returns a new access token + rotated refresh token
-- Access token lifetime drops to ~15 minutes (short-lived by design)
-- Refresh token lifetime ~7 days, rotated on every use
-- Rotation: the old refresh token is revoked the moment a new one is issued
-- Reuse detection: presenting a previously-rotated token revokes the entire family (indicates theft)
-- Frontend `client.ts` retries once on 401 with a refresh call; on refresh failure, clears session
-- `AuthContext` gains `refreshToken` alongside `token` in `localStorage`
+2. **GitHub Actions CI.** Add `.github/workflows/ci.yml` running `dotnet test` and `npm run build` on push to main. ConcurrencyTests (`RequiresSql` tagged) get skipped on CI — they need real SQL Server. ~1 hr.
 
-After refresh tokens → GitHub Actions CI (last Phase 1.5 item). Password reset deferred to Phase 3.
+After both → **Phase 2 — MatchEngine.** Copy WalletApp infrastructure, build `OrderBook` + `Order` aggregates, price-time priority matching, SignalR, React frontend.
 
 ---
 
@@ -949,13 +1029,13 @@ After refresh tokens → GitHub Actions CI (last Phase 1.5 item). Password reset
 
 Paste this entire file and say:
 
-> "Continue from where this PROGRESS.md leaves off. Current state: 62 backend tests passing. Phase 1 complete (WalletApp backend + frontend). Phase 1.5 in progress: ProblemDetails, idempotency keys, cursor pagination, Serilog + correlation IDs, health checks, rate limiting, and API versioning are done. Remaining Phase 1.5 items: refresh tokens, GitHub Actions CI (in that order). Password reset deferred to Phase 3. Next step is refresh tokens. Give me exact files to create/modify, plus what to test after."
+> "Continue from where this PROGRESS.md leaves off. Current state: 72 backend tests passing. Phase 1 complete (WalletApp backend + frontend). Phase 1.5 nearly complete: ProblemDetails, idempotency keys, cursor pagination, Serilog + correlation IDs, health checks, rate limiting, API versioning, and refresh tokens are all done. Only GitHub Actions CI remains, and it's blocked on the frontend `Pages` → `pages` case-consistency fix. Next step is the case-consistency fix, then CI. After that we start Phase 2 — MatchEngine. Give me exact files to create/modify, plus what to test after."
 
 Be specific about wanting:
 - Exact file paths
 - Full file contents (not snippets), or precise diffs against pasted files
 - Exact commands
 - How to test after
-- What NOT to touch (the 62 tests should keep passing)
+- What NOT to touch (the 72 tests should keep passing)
 
 If a file shape is unknown, the assistant should ask you to paste it rather than assume.

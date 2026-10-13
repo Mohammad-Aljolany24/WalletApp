@@ -18,7 +18,7 @@ public static class TestHelpers
         response.EnsureSuccessStatusCode();
 
         var result = await response.Content.ReadFromJsonAsync<LoginResponse>();
-        return result!.Token;
+        return result!.AccessToken;
     }
 
 
@@ -43,7 +43,7 @@ public static class TestHelpers
         user!.IsVerified = true;
         await userStore.SaveAsync(user);
 
-        return result!.Token;
+        return result!.AccessToken;
     }
 
     public static async Task<string> RegisterAdminAndLoginAsync(
@@ -67,10 +67,13 @@ public static class TestHelpers
     response.EnsureSuccessStatusCode();
 
     var result = await response.Content.ReadFromJsonAsync<LoginResponse>();
-    return result!.Token;
+    return result!.AccessToken;
 }
 
 
-    private record LoginResponse(string Token);
+    private record LoginResponse(
+        string AccessToken,
+        string RefreshToken,
+        DateTime AccessTokenExpiresAt);
 
 }

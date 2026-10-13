@@ -14,6 +14,8 @@ public class AppDbContext : DbContext
 
      public DbSet<IdempotencyRecord> IdempotencyRecords => Set<IdempotencyRecord>();
 
+     public DbSet<RefreshTokenRecord> RefreshTokens => Set<RefreshTokenRecord>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<EventRecord>(e =>
@@ -41,6 +43,15 @@ public class AppDbContext : DbContext
             e.Property(x => x.PasswordHash).IsRequired();
             e.Property(x => x.Role).HasMaxLength(50).IsRequired(); 
         });
+        modelBuilder.Entity<RefreshTokenRecord>(e =>
+{
+    e.ToTable("RefreshTokens");
+    e.HasKey(x => x.Id);
+    e.HasIndex(x => x.TokenHash).IsUnique();
+    e.HasIndex(x => x.FamilyId);
+    e.HasIndex(x => x.UserId);
+    e.Property(x => x.TokenHash).HasMaxLength(128).IsRequired();
+});
 
         modelBuilder.Entity<IdempotencyRecord>(e =>
 {
@@ -52,4 +63,7 @@ public class AppDbContext : DbContext
     e.HasIndex(x => x.ExpiresAt); // for the future TTL cleanup job
     });
     }
+
+
+    
 }

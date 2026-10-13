@@ -1,6 +1,10 @@
 namespace WalletApp.Core.Auth;
 
+public record AccessToken(string Value, DateTime ExpiresAt);
+
 public interface ITokenService
 {
-    string GenerateToken(User user);
+    AccessToken GenerateAccessToken(User user);
+    (string Token, string Hash) GenerateRefreshToken();
+    string HashRefreshToken(string token);
 }

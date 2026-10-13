@@ -8,14 +8,14 @@ import {
 } from "react";
 import { authApi } from "../api/auth";
 import { ApiError } from "../api/client";
-import type { User } from "../types/api";
+import type { LoginResponse, User } from "../types/api";
 
 interface AuthContextValue {
   token: string | null;
   user: User | null;
   loading: boolean;
   error: string | null;
-  login: (token: string) => Promise<void>;
+  login: (tokens: LoginResponse) => Promise<void>;
   logout: () => void;
 }
 
@@ -23,7 +23,7 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(
-    () => localStorage.getItem("token")
+    () => localStorage.getItem("accessToken")
   );
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
@@ -51,12 +51,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (cancelled) return;
 
         if (err instanceof ApiError && err.status === 401) {
-          // Token is genuinely invalid — clear it and let the redirect happen.
-          localStorage.removeItem("token");
+          localStorage.removeItem("accessToken");
+          localStorage.removeItem("refreshToken");
           setToken(null);
           setUser(null);
         } else {
-          // Network error or server error — keep the token, surface the error.
           setError(
             err instanceof Error ? err.message : "Could not reach server."
           );
@@ -71,13 +70,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [token]);
 
-  const login = useCallback(async (newToken: string) => {
-    localStorage.setItem("token", newToken);
-    setToken(newToken);
+  const login = useCallback(async (tokens: LoginResponse) => {
+    localStorage.setItem("accessToken", tokens.accessToken);
+    localStorage.setItem("refreshToken", tokens.refreshToken);
+    setToken(tokens.accessToken);
   }, []);
 
   const logout = useCallback(() => {
-    localStorage.removeItem("token");
+    const refreshToken = localStorage.getItem("refreshToken");
+    if (refreshToken) {
+      // Fire-and-forget: revoke server-side, don't block UI.
+      authApi.logout(refreshToken).catch(() => {});
+    }
+
+    localStorage.removeItem("accessToken");
+    localStorage.removeItem("refreshToken");
     setToken(null);
     setUser(null);
     setError(null);

@@ -13,9 +13,9 @@ using WalletApp.Data;
 using WalletApp.Data.Auth;
 using WalletApp.Data.EventStore;
 using WalletApp.Data.ReadModels;
-using Microsoft.AspNetCore.Authorization;                                   
-using WalletApp.API.Authorization;                                           
-using WalletApp.Core.Auth.Requirements;    
+using Microsoft.AspNetCore.Authorization;
+using WalletApp.API.Authorization;
+using WalletApp.Core.Auth.Requirements;
 using WalletApp.Core.Events;
 using WalletApp.API.Exceptions;
 using WalletApp.Core.Exceptions;
@@ -84,6 +84,8 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 var jwtSecret = builder.Configuration["Jwt:Secret"]!;
 var jwtIssuer = builder.Configuration["Jwt:Issuer"]!;
 var jwtAudience = builder.Configuration["Jwt:Audience"]!;
+var accessTokenMinutes = builder.Configuration.GetValue("Jwt:AccessTokenMinutes", 15);
+var refreshTokenDays = builder.Configuration.GetValue("Jwt:RefreshTokenDays", 7);
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
@@ -99,7 +101,8 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             ValidAudience = jwtAudience,
             IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSecret)),
             NameClaimType = "sub",
-             RoleClaimType = "role"  
+             RoleClaimType = "role" ,
+              ClockSkew = TimeSpan.Zero 
         };
 
         // ← NEW: log authentication results
@@ -160,8 +163,15 @@ builder.Services.AddHealthChecks()
 builder.Services.AddScoped<IUserStore, SqlUserStore>();
 builder.Services.AddSingleton<IPasswordHasher, BcryptPasswordHasher>();
 builder.Services.AddSingleton<ITokenService>(_ =>
-    new JwtTokenService(jwtSecret, jwtIssuer, jwtAudience));
-builder.Services.AddScoped<IAuthService, AuthService>();
+    new JwtTokenService(jwtSecret, jwtIssuer, jwtAudience, accessTokenMinutes));
+    builder.Services.AddScoped<IRefreshTokenStore, SqlRefreshTokenStore>();
+builder.Services.AddScoped<IAuthService>(sp =>
+    new AuthService(
+        sp.GetRequiredService<IUserStore>(),
+        sp.GetRequiredService<IPasswordHasher>(),
+        sp.GetRequiredService<ITokenService>(),
+        sp.GetRequiredService<IRefreshTokenStore>(),
+        refreshTokenDays));
 
 builder.Services.AddScoped<IAuthorizationHandler, CanTradeHandler>();
 builder.Services.AddScoped<IAuthorizationHandler, IsVerifiedHandler>();
@@ -306,9 +316,31 @@ authGroup.MapPost("/register", async (RegisterRequest req, IAuthService auth) =>
 
 authGroup.MapPost("/login", async (LoginRequest req, IAuthService auth) =>
 {
-    var token = await auth.LoginAsync(req.Email, req.Password);
-    return Results.Ok(new { token });
+    var tokens = await auth.LoginAsync(req.Email, req.Password);
+    return Results.Ok(new
+    {
+        accessToken = tokens.AccessToken,
+        refreshToken = tokens.RefreshToken,
+        accessTokenExpiresAt = tokens.AccessTokenExpiresAt
+    });
 }).RequireRateLimiting(RateLimitPolicies.Auth);
+
+authGroup.MapPost("/refresh", async (RefreshRequest req, IAuthService auth) =>
+{
+    var tokens = await auth.RefreshAsync(req.RefreshToken);
+    return Results.Ok(new
+    {
+        accessToken = tokens.AccessToken,
+        refreshToken = tokens.RefreshToken,
+        accessTokenExpiresAt = tokens.AccessTokenExpiresAt
+    });
+});
+
+authGroup.MapPost("/logout", async (LogoutRequest req, IAuthService auth) =>
+{
+    await auth.LogoutAsync(req.RefreshToken);
+    return Results.NoContent();
+});
 
 authGroup.MapGet("/me", async (
     HttpContext ctx,
@@ -510,5 +542,7 @@ finally
 // ============================================
 public record RegisterRequest(string Email, string Password);
 public record LoginRequest(string Email, string Password);
+public record RefreshRequest(string RefreshToken);
+public record LogoutRequest(string RefreshToken);
 
 public partial class Program { }

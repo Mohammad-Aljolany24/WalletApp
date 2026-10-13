@@ -39,11 +39,9 @@ export default function RegisterPage() {
     try {
       await authApi.register({ email: data.email, password: data.password });
       // Auto-login after successful register.
-      const { token } = await authApi.login({
-        email: data.email,
-        password: data.password,
-      });
-      await login(token);
+     const tokens = await authApi.login(data);
+    await login(tokens);
+      
       navigate("/dashboard", { replace: true });
     } catch (err) {
       if (err instanceof ApiError && err.status === 400) {

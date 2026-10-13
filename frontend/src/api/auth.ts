@@ -17,4 +17,7 @@ export const authApi = {
     api.post<LoginResponse>(`${BASE}/login`, data),
 
   me: () => api.get<User>(`${BASE}/me`),
+
+  logout: (refreshToken: string) =>
+    api.post<void>(`${BASE}/logout`, { refreshToken }),
 };

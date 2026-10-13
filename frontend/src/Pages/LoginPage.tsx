@@ -36,8 +36,8 @@ export default function LoginPage() {
   const onSubmit = async (data: LoginForm) => {
     setError(null);
     try {
-      const { token } = await authApi.login(data);
-      await login(token);
+     const tokens = await authApi.login(data);
+    await login(tokens);
       navigate(from, { replace: true });
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
